@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import './styles.css';
 import { POLL_BLOCKS } from './registers';
-import { readBlocks, toRegisterMap, type BlockResult } from './api';
+import { readBlocks, startLogging, toRegisterMap, type BlockResult } from './api';
+import LoggingPanel, { loadLogEnabled, loadLogInterval } from './components/LoggingPanel';
 import { SafetyProvider, useSafety } from './safety';
 import { loadPrefs, useUpdater, type UpdatePrefs } from './updater';
 import ConnectionBar from './components/ConnectionBar';
@@ -57,6 +58,13 @@ function Shell() {
     const id = setInterval(() => void poll(), POLL_MS);
     return () => clearInterval(id);
   }, [connected, poll]);
+
+  // Logging is on by default: the data is only capturable while the event is
+  // happening, and a missed solar ramp cannot be recovered later.
+  useEffect(() => {
+    if (!connected || !loadLogEnabled()) return;
+    void startLogging(loadLogInterval()).catch(() => undefined);
+  }, [connected]);
 
   return (
     <div className="app">
@@ -138,7 +146,12 @@ function Shell() {
       {tab === 'settings' && (
         <Settings registers={registers} connected={connected} onWritten={() => void poll()} />
       )}
-      {tab === 'raw' && <RawExplorer blocks={blocks} />}
+      {tab === 'raw' && (
+        <>
+          <LoggingPanel connected={connected} />
+          <RawExplorer blocks={blocks} />
+        </>
+      )}
       {tab === 'updates' && (
         <Updates
           prefs={prefs}

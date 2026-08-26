@@ -1,14 +1,21 @@
+mod logging;
 mod modbus;
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 
-use modbus::{ModbusError, Rtu};
+use logging::{Logger, LoggingStatus};
+use modbus::Rtu;
 
+/// Shared so the background logger thread can use the same port as the UI
+/// poller. One process, one open handle, no contention over the COM port.
 #[derive(Default)]
-struct Link(Mutex<Option<Rtu>>);
+pub struct Link(pub Arc<Mutex<Option<Rtu>>>);
 
 #[derive(Serialize)]
 struct PortInfo {
@@ -144,7 +151,7 @@ fn write_register(
     }
 
     rtu.write_single(addr, value)?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(200));
 
     let readback = *rtu
         .read_holding(addr, 1)?
@@ -171,12 +178,54 @@ fn discover_blocks(link: State<Link>, stride: u16) -> Result<Vec<u16>, String> {
     let mut found = Vec::new();
     let mut addr: u32 = 0;
     while addr <= 0xFFFF {
-        if let Ok(_) = rtu.read_holding(addr as u16, 1) {
+        if rtu.read_holding(addr as u16, 1).is_ok() {
             found.push(addr as u16);
         }
         addr += stride.max(1) as u32;
     }
     Ok(found)
+}
+
+#[tauri::command]
+fn start_logging(
+    app: tauri::AppHandle,
+    link: State<Link>,
+    logger: State<Arc<Logger>>,
+    interval_secs: u64,
+) -> Result<LoggingStatus, String> {
+    if logger.running.load(Ordering::Relaxed) {
+        return Ok(logging::status(&logger));
+    }
+
+    let dir: PathBuf = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("ampinvt-registers.jsonl");
+
+    *logger.path.lock().unwrap() = Some(path.clone());
+    logger.running.store(true, Ordering::Relaxed);
+
+    logging::spawn(
+        link.0.clone(),
+        logger.inner().clone(),
+        path,
+        Duration::from_secs(interval_secs.clamp(2, 3600)),
+    );
+
+    Ok(logging::status(&logger))
+}
+
+#[tauri::command]
+fn stop_logging(logger: State<Arc<Logger>>) -> LoggingStatus {
+    logger.running.store(false, Ordering::Relaxed);
+    logging::status(&logger)
+}
+
+#[tauri::command]
+fn logging_status(logger: State<Arc<Logger>>) -> LoggingStatus {
+    logging::status(&logger)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -186,6 +235,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(Link::default())
+        .manage(Arc::new(Logger::default()))
         .invoke_handler(tauri::generate_handler![
             list_ports,
             connect,
@@ -193,14 +243,11 @@ pub fn run() {
             is_connected,
             read_blocks,
             write_register,
-            discover_blocks
+            discover_blocks,
+            start_logging,
+            stop_logging,
+            logging_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-// Silence an unused-import warning when the error type is only used via `?`.
-#[allow(dead_code)]
-fn _assert_error_conversion(e: ModbusError) -> String {
-    e.into()
 }

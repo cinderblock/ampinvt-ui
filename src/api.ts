@@ -42,6 +42,24 @@ export const writeRegister = (addr: number, value: number, expect: number) =>
 export const discoverBlocks = (stride: number) =>
   invoke<number[]>('discover_blocks', { stride });
 
+export interface LoggingStatus {
+  running: boolean;
+  path: string | null;
+  records: number;
+  last_error: string | null;
+}
+
+/**
+ * Starts the Rust-side background logger. It writes every readable register,
+ * not just the decoded ones — the unnamed registers are the reason to log.
+ */
+export const startLogging = (intervalSecs: number) =>
+  invoke<LoggingStatus>('start_logging', { intervalSecs });
+
+export const stopLogging = () => invoke<LoggingStatus>('stop_logging');
+
+export const loggingStatus = () => invoke<LoggingStatus>('logging_status');
+
 /** Flatten block results into an address -> value map. */
 export function toRegisterMap(blocks: BlockResult[]): Map<number, number> {
   const map = new Map<number, number>();
