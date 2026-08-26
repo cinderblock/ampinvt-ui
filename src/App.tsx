@@ -20,6 +20,8 @@ type Tab = 'dashboard' | 'settings' | 'raw' | 'updates';
  * device changes quickly.
  */
 const POLL_MS = 1000;
+/** Ceiling for the failure back-off. */
+const MAX_POLL_MS = 15000;
 
 function Shell() {
   const [connected, setConnected] = useState(false);
@@ -38,6 +40,10 @@ function Shell() {
 
   const failedBlocks = blocks.filter((b) => b.error !== null);
 
+  /** Consecutive fully-failed polls, used to back off. */
+  const failStreak = useRef(0);
+  const [pollMs, setPollMs] = useState(POLL_MS);
+
   const poll = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -47,8 +53,21 @@ function Shell() {
       setRegisters(toRegisterMap(results));
       setLastRead(new Date());
       setError(null);
+
+      // Hammering a device that is not answering just burns the serial port
+      // and fills the log with timeouts. Back off, then recover immediately
+      // once a single block reads cleanly again.
+      const allFailed = results.every((r) => r.error !== null);
+      failStreak.current = allFailed ? failStreak.current + 1 : 0;
+      setPollMs(
+        failStreak.current === 0
+          ? POLL_MS
+          : Math.min(POLL_MS * 2 ** Math.min(failStreak.current, 4), MAX_POLL_MS),
+      );
     } catch (err) {
       setError(String(err));
+      failStreak.current += 1;
+      setPollMs(Math.min(POLL_MS * 2 ** Math.min(failStreak.current, 4), MAX_POLL_MS));
     } finally {
       inFlight.current = false;
     }
@@ -57,9 +76,9 @@ function Shell() {
   useEffect(() => {
     if (!connected) return undefined;
     void poll();
-    const id = setInterval(() => void poll(), POLL_MS);
+    const id = setInterval(() => void poll(), pollMs);
     return () => clearInterval(id);
-  }, [connected, poll]);
+  }, [connected, poll, pollMs]);
 
   // Logging is on by default: the data is only capturable while the event is
   // happening, and a missed solar ramp cannot be recovered later.

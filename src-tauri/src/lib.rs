@@ -51,8 +51,29 @@ struct WriteReport {
     ok: bool,
 }
 
+/// Run blocking serial work off the main thread.
+///
+/// Tauri executes non-async commands on the **main thread**, which is also the
+/// UI event loop. Blocking serial I/O there makes the window stop responding to
+/// drags and clicks — and with a 500ms timeout per block, a failing read stalls
+/// the loop for seconds. Every command that touches the port must go through
+/// here. Do not "simplify" one of these back into a sync `fn`.
+async fn off_thread<T, F>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("worker thread failed: {e}"))?
+}
+
 #[tauri::command]
-fn list_ports() -> Result<Vec<PortInfo>, String> {
+async fn list_ports() -> Result<Vec<PortInfo>, String> {
+    off_thread(list_ports_blocking).await
+}
+
+fn list_ports_blocking() -> Result<Vec<PortInfo>, String> {
     let ports = serialport::available_ports().map_err(|e| e.to_string())?;
     Ok(ports
         .into_iter()
@@ -80,20 +101,35 @@ fn list_ports() -> Result<Vec<PortInfo>, String> {
 }
 
 #[tauri::command]
-fn connect(link: State<Link>, path: String, baud: u32, slave: u8) -> Result<(), String> {
-    let rtu = Rtu::open(&path, baud, slave)?;
-    *link.0.lock().unwrap() = Some(rtu);
-    Ok(())
+async fn connect(
+    link: State<'_, Link>,
+    path: String,
+    baud: u32,
+    slave: u8,
+) -> Result<(), String> {
+    let port = link.0.clone();
+    off_thread(move || {
+        let rtu = Rtu::open(&path, baud, slave)?;
+        *port.lock().unwrap() = Some(rtu);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-fn disconnect(link: State<Link>) {
-    *link.0.lock().unwrap() = None;
+async fn disconnect(link: State<'_, Link>) -> Result<(), String> {
+    let port = link.0.clone();
+    off_thread(move || {
+        *port.lock().unwrap() = None;
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-fn is_connected(link: State<Link>) -> bool {
-    link.0.lock().unwrap().is_some()
+async fn is_connected(link: State<'_, Link>) -> Result<bool, String> {
+    let port = link.0.clone();
+    off_thread(move || Ok(port.lock().unwrap().is_some())).await
 }
 
 /// Read several blocks in one round trip from the UI's point of view.
@@ -101,25 +137,32 @@ fn is_connected(link: State<Link>) -> bool {
 /// rest still come back, because a sparse map means some blocks legitimately
 /// do not exist.
 #[tauri::command]
-fn read_blocks(link: State<Link>, blocks: Vec<BlockSpec>) -> Result<Vec<BlockResult>, String> {
-    let mut guard = link.0.lock().unwrap();
-    let rtu = guard.as_mut().ok_or("not connected")?;
+async fn read_blocks(
+    link: State<'_, Link>,
+    blocks: Vec<BlockSpec>,
+) -> Result<Vec<BlockResult>, String> {
+    let port = link.0.clone();
+    off_thread(move || {
+        let mut guard = port.lock().unwrap();
+        let rtu = guard.as_mut().ok_or("not connected")?;
 
-    Ok(blocks
-        .into_iter()
-        .map(|spec| match rtu.read_holding(spec.addr, spec.count) {
-            Ok(values) => BlockResult {
-                addr: spec.addr,
-                values: Some(values),
-                error: None,
-            },
-            Err(err) => BlockResult {
-                addr: spec.addr,
-                values: None,
-                error: Some(err.to_string()),
-            },
-        })
-        .collect())
+        Ok(blocks
+            .into_iter()
+            .map(|spec| match rtu.read_holding(spec.addr, spec.count) {
+                Ok(values) => BlockResult {
+                    addr: spec.addr,
+                    values: Some(values),
+                    error: None,
+                },
+                Err(err) => BlockResult {
+                    addr: spec.addr,
+                    values: None,
+                    error: Some(err.to_string()),
+                },
+            })
+            .collect())
+    })
+    .await
 }
 
 /// Guarded single-register write.
@@ -129,61 +172,69 @@ fn read_blocks(link: State<Link>, blocks: Vec<BlockSpec>) -> Result<Vec<BlockRes
 /// documented, and the guard turns "we mapped it wrong" from a destructive write
 /// into a harmless error. Do not add a path that bypasses it.
 #[tauri::command]
-fn write_register(
-    link: State<Link>,
+async fn write_register(
+    link: State<'_, Link>,
     addr: u16,
     value: u16,
     expect: u16,
 ) -> Result<WriteReport, String> {
-    let mut guard = link.0.lock().unwrap();
-    let rtu = guard.as_mut().ok_or("not connected")?;
+    let port = link.0.clone();
+    off_thread(move || {
+        let mut guard = port.lock().unwrap();
+        let rtu = guard.as_mut().ok_or("not connected")?;
 
-    let current = *rtu
-        .read_holding(addr, 1)?
-        .first()
-        .ok_or("empty read before write")?;
+        let current = *rtu
+            .read_holding(addr, 1)?
+            .first()
+            .ok_or("empty read before write")?;
 
-    if current != expect {
-        return Err(format!(
-            "refusing to write: register {addr:#06x} holds {current}, expected {expect}. \
-             Re-read the device before retrying."
-        ));
-    }
+        if current != expect {
+            return Err(format!(
+                "refusing to write: register {addr:#06x} holds {current}, expected {expect}. \
+                 Re-read the device before retrying."
+            ));
+        }
 
-    rtu.write_single(addr, value)?;
-    std::thread::sleep(Duration::from_millis(200));
+        rtu.write_single(addr, value)?;
+        std::thread::sleep(Duration::from_millis(200));
 
-    let readback = *rtu
-        .read_holding(addr, 1)?
-        .first()
-        .ok_or("empty read after write")?;
+        let readback = *rtu
+            .read_holding(addr, 1)?
+            .first()
+            .ok_or("empty read after write")?;
 
-    Ok(WriteReport {
-        addr,
-        previous: current,
-        written: value,
-        readback,
-        ok: readback == value,
+        Ok(WriteReport {
+            addr,
+            previous: current,
+            written: value,
+            readback,
+            ok: readback == value,
+        })
     })
+    .await
 }
 
 /// Sweep the whole 16-bit space at a stride to discover which blocks exist.
 /// This is how the map was found in the first place; kept so a different unit
 /// or firmware can be re-surveyed without leaving the app.
 #[tauri::command]
-fn discover_blocks(link: State<Link>, stride: u16) -> Result<Vec<u16>, String> {
-    let mut guard = link.0.lock().unwrap();
-    let rtu = guard.as_mut().ok_or("not connected")?;
+async fn discover_blocks(link: State<'_, Link>, stride: u16) -> Result<Vec<u16>, String> {
+    let port = link.0.clone();
+    off_thread(move || {
+        let mut guard = port.lock().unwrap();
+        let rtu = guard.as_mut().ok_or("not connected")?;
 
-    let mut found = Vec::new();
-    let mut addr: u32 = 0;
-    while addr <= 0xFFFF {
-        if rtu.read_holding(addr as u16, 1).is_ok() {
-            found.push(addr as u16);
+        let mut found = Vec::new();
+        let mut addr: u32 = 0;
+        while addr <= 0xFFFF {
+            if rtu.read_holding(addr as u16, 1).is_ok() {
+                found.push(addr as u16);
+            }
+            addr += stride.max(1) as u32;
         }
-        addr += stride.max(1) as u32;
-    }
-    Ok(found)
+        Ok(found)
+    })
+    .await
 }
 
 #[tauri::command]

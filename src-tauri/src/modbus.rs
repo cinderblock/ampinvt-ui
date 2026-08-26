@@ -82,7 +82,10 @@ impl Rtu {
             .parity(serialport::Parity::None)
             .stop_bits(serialport::StopBits::One)
             .flow_control(serialport::FlowControl::None)
-            .timeout(Duration::from_millis(500))
+            // The longest legitimate reply is 32 registers = 69 bytes, ~72ms at
+            // 9600 baud. 300ms is generous margin, and keeps a dead device from
+            // stalling a poll cycle for seconds.
+            .timeout(Duration::from_millis(300))
             .open()
             .map_err(|e| ModbusError::Io(e.to_string()))?;
 
