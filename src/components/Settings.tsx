@@ -1,7 +1,14 @@
 import { useState } from 'react';
 
 import { writeRegister, type WriteReport } from '../api';
-import { REGISTERS, formatValue, toDisplay, toRaw, type RegisterDef } from '../registers';
+import {
+  REGISTERS,
+  formatValue,
+  isLithiumBatteryType,
+  toDisplay,
+  toRaw,
+  type RegisterDef,
+} from '../registers';
 
 interface Props {
   registers: Map<number, number>;
@@ -9,7 +16,15 @@ interface Props {
   onWritten: () => void;
 }
 
-const GROUPS: { title: string; desc: string; keys: string[] }[] = [
+interface Group {
+  title: string;
+  desc: string;
+  keys: string[];
+  /** Setup groups are hidden behind the second gate. */
+  setup?: boolean;
+}
+
+const GROUPS: Group[] = [
   {
     title: 'Charge current limits',
     desc: 'Keep these at or below the battery bank rating — 30 A per pack for the OGRPHY 100 Ah packs.',
@@ -40,6 +55,12 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
     keys: ['cutoffDischargeSoc', 'dischargeAlarmSoc', 'switchToMainsSoc', 'cutoffChargeSoc'],
   },
   {
+    title: 'Battery definition',
+    desc: 'Changing the battery type makes the inverter rewrite its whole charge profile. Everything in the two voltage sections above will move.',
+    keys: ['batteryType'],
+    setup: true,
+  },
+  {
     title: 'Output (read-only here)',
     desc: 'Deliberately not writable from this app — changing them affects every connected load.',
     keys: ['acOutputVoltage', 'outputFrequency'],
@@ -49,35 +70,50 @@ const GROUPS: { title: string; desc: string; keys: string[] }[] = [
 function Row({
   def,
   registers,
-  unlocked,
+  enabled,
   onWritten,
 }: {
   def: RegisterDef;
   registers: Map<number, number>;
-  unlocked: boolean;
+  enabled: boolean;
   onWritten: () => void;
 }) {
   const raw = registers.get(def.addr);
   const [draft, setDraft] = useState<string>('');
   const [pending, setPending] = useState(false);
   const [report, setReport] = useState<WriteReport | null>(null);
+  const [cascadeBefore, setCascadeBefore] = useState<Map<number, number> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const editable = unlocked && def.writable && raw !== undefined;
+  const editable = enabled && def.writable && raw !== undefined;
+  const isEnum = Boolean(def.options);
+
   const parsed = draft === '' ? undefined : Number(draft);
   const valid =
     parsed !== undefined &&
     Number.isFinite(parsed) &&
-    (def.min === undefined || parsed >= def.min) &&
-    (def.max === undefined || parsed <= def.max);
-  const nextRaw = valid ? toRaw(def, parsed) : undefined;
+    (isEnum ||
+      ((def.min === undefined || parsed >= def.min) &&
+        (def.max === undefined || parsed <= def.max)));
+  const nextRaw = valid ? (isEnum ? parsed : toRaw(def, parsed)) : undefined;
   const changed = nextRaw !== undefined && raw !== undefined && nextRaw !== raw;
+
+  const chosen = isEnum ? def.options?.find((o) => o.value === nextRaw) : undefined;
+  const currentOption = isEnum ? def.options?.find((o) => o.value === raw) : undefined;
+
+  const show = (value: number) =>
+    isEnum
+      ? def.options?.find((o) => o.value === value)?.code ?? String(value)
+      : `${toDisplay(def, value).toFixed(def.decimals)}${def.unit ?? ''}`;
 
   const apply = async () => {
     if (nextRaw === undefined || raw === undefined) return;
     setPending(true);
     setError(null);
+    if (def.cascades) {
+      setCascadeBefore(new Map(def.cascades.map((a) => [a, registers.get(a) ?? -1])));
+    }
     try {
       const result = await writeRegister(def.addr, nextRaw, raw);
       setReport(result);
@@ -87,10 +123,24 @@ function Row({
     } catch (err) {
       setError(String(err));
       setConfirming(false);
+      setCascadeBefore(null);
     } finally {
       setPending(false);
     }
   };
+
+  const cascadeRows = (def.cascades ?? [])
+    .map((addr) => {
+      const before = cascadeBefore?.get(addr);
+      const now = registers.get(addr);
+      if (before === undefined || now === undefined || before === now) return null;
+      const other = REGISTERS.find((r) => r.addr === addr);
+      const label = other?.label ?? `0x${addr.toString(16).padStart(4, '0')}`;
+      const fmt = (v: number) =>
+        other ? `${toDisplay(other, v).toFixed(other.decimals)}${other.unit ?? ''}` : String(v);
+      return `${label} ${fmt(before)} → ${fmt(now)}`;
+    })
+    .filter((line): line is string => Boolean(line));
 
   return (
     <div className="setting">
@@ -105,7 +155,7 @@ function Row({
           {def.setting && <>{def.setting} · </>}
           <span className="mono">0x{def.addr.toString(16).padStart(4, '0')}</span>
           {raw !== undefined && <> · raw {raw}</>}
-          {def.min !== undefined && def.max !== undefined && (
+          {!isEnum && def.min !== undefined && def.max !== undefined && (
             <>
               {' '}
               · range {def.min}–{def.max}
@@ -114,29 +164,28 @@ function Row({
           )}
         </div>
         {def.note && <div className="note">{def.note}</div>}
+
+        {chosen?.warn && changed && <div className="note err">{chosen.warn}</div>}
+
         {report && (
           <div className="note">
             {report.ok ? '✓ ' : '✕ '}
-            wrote {toDisplay(def, report.written).toFixed(def.decimals)}
-            {def.unit}; device now reads{' '}
-            {toDisplay(def, report.readback).toFixed(def.decimals)}
-            {def.unit}
+            wrote {show(report.written)}; device now reads {show(report.readback)}
+            {cascadeRows.length > 0 && (
+              <>
+                <br />
+                Charge profile rewritten by the inverter: {cascadeRows.join(' · ')}
+              </>
+            )}
           </div>
         )}
         {error && <div className="note err">{error}</div>}
+
         {confirming && nextRaw !== undefined && raw !== undefined && (
           <div className="note">
-            Change <strong>{def.label}</strong> from{' '}
-            <strong>
-              {toDisplay(def, raw).toFixed(def.decimals)}
-              {def.unit}
-            </strong>{' '}
-            to{' '}
-            <strong>
-              {toDisplay(def, nextRaw).toFixed(def.decimals)}
-              {def.unit}
-            </strong>
-            ?{' '}
+            Change <strong>{def.label}</strong> from <strong>{show(raw)}</strong> to{' '}
+            <strong>{show(nextRaw)}</strong>?{' '}
+            {def.cascades && <>The inverter will rewrite the charge voltages to match. </>}
             <button className="danger" onClick={() => void apply()} disabled={pending}>
               {pending ? 'Writing…' : 'Confirm write'}
             </button>{' '}
@@ -148,27 +197,51 @@ function Row({
       </div>
 
       <div className="current">
-        {formatValue(def, raw)}
-        {def.unit && <span className="unit"> {def.unit}</span>}
+        {isEnum ? (
+          <span className="mono">{currentOption?.code ?? (raw ?? '—')}</span>
+        ) : (
+          <>
+            {formatValue(def, raw)}
+            {def.unit && <span className="unit"> {def.unit}</span>}
+          </>
+        )}
       </div>
 
       <div>
         {def.writable ? (
           <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              type="number"
-              value={draft}
-              placeholder={raw !== undefined ? toDisplay(def, raw).toFixed(def.decimals) : ''}
-              min={def.min}
-              max={def.max}
-              step={def.step}
-              disabled={!editable || pending}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                setConfirming(false);
-                setReport(null);
-              }}
-            />
+            {isEnum ? (
+              <select
+                value={draft === '' ? String(raw ?? '') : draft}
+                disabled={!editable || pending}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setConfirming(false);
+                  setReport(null);
+                }}
+              >
+                {def.options?.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.code} — {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                value={draft}
+                placeholder={raw !== undefined ? toDisplay(def, raw).toFixed(def.decimals) : ''}
+                min={def.min}
+                max={def.max}
+                step={def.step}
+                disabled={!editable || pending}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setConfirming(false);
+                  setReport(null);
+                }}
+              />
+            )}
             <button
               disabled={!editable || !changed || pending || confirming}
               onClick={() => setConfirming(true)}
@@ -186,7 +259,18 @@ function Row({
 
 export default function Settings({ registers, connected, onWritten }: Props) {
   const [unlocked, setUnlocked] = useState(false);
+  const [setupMode, setSetupMode] = useState(false);
+  const [armingSetup, setArmingSetup] = useState(false);
   const byKey = new Map(REGISTERS.map((r) => [r.key, r]));
+
+  const lockEverything = () => {
+    setUnlocked(false);
+    setSetupMode(false);
+    setArmingSetup(false);
+  };
+
+  const batteryRaw = registers.get(0x1002);
+  const lithium = isLithiumBatteryType(batteryRaw);
 
   return (
     <>
@@ -199,7 +283,7 @@ export default function Settings({ registers, connected, onWritten }: Props) {
             <>
               <strong>Writes are unlocked.</strong> Every write is guarded: the value you
               see must still match what the device holds, or it is refused. Most of this
-              map is inferred rather than documented — confirm the change on the inverter's
+              map is inferred rather than documented — confirm changes on the inverter's
               LCD afterwards.
             </>
           ) : (
@@ -211,7 +295,7 @@ export default function Settings({ registers, connected, onWritten }: Props) {
           <div style={{ marginTop: 8 }}>
             <button
               className={unlocked ? '' : 'danger'}
-              onClick={() => setUnlocked((v) => !v)}
+              onClick={() => (unlocked ? lockEverything() : setUnlocked(true))}
               disabled={!connected}
             >
               {unlocked ? 'Lock writes' : 'Unlock writes'}
@@ -220,7 +304,7 @@ export default function Settings({ registers, connected, onWritten }: Props) {
         </div>
       </div>
 
-      {GROUPS.map((group) => (
+      {GROUPS.filter((g) => !g.setup).map((group) => (
         <section key={group.title}>
           <h2>{group.title}</h2>
           <p className="desc">{group.desc}</p>
@@ -232,7 +316,81 @@ export default function Settings({ registers, connected, onWritten }: Props) {
                 key={def.key}
                 def={def}
                 registers={registers}
-                unlocked={unlocked}
+                enabled={unlocked}
+                onWritten={onWritten}
+              />
+            ))}
+        </section>
+      ))}
+
+      {/* ------------------------------------------------------ setup tier -- */}
+      <div className={`banner ${setupMode ? 'critical' : ''}`}>
+        <span className="icon" aria-hidden="true">
+          {setupMode ? '⚠' : '🔧'}
+        </span>
+        <div className="body">
+          <strong>Setup mode{setupMode ? ' is active' : ''}.</strong> Battery-defining
+          parameters live behind this second gate because changing one makes the inverter
+          rewrite a whole group of other registers at once. Ordinary settings do not need
+          it.
+          {!unlocked && (
+            <>
+              {' '}
+              Unlock writes first.
+            </>
+          )}
+          {armingSetup && (
+            <div style={{ marginTop: 8 }}>
+              Enabling setup mode allows changing the battery type. The inverter will
+              immediately rewrite its constant-charge, boost and float voltages to that
+              profile's defaults, discarding any values you have tuned. Continue?{' '}
+              <button className="danger" onClick={() => { setSetupMode(true); setArmingSetup(false); }}>
+                Enable setup mode
+              </button>{' '}
+              <button onClick={() => setArmingSetup(false)}>Cancel</button>
+            </div>
+          )}
+          {!armingSetup && (
+            <div style={{ marginTop: 8 }}>
+              <button
+                className={setupMode ? '' : 'danger'}
+                disabled={!unlocked || !connected}
+                onClick={() => (setupMode ? setSetupMode(false) : setArmingSetup(true))}
+              >
+                {setupMode ? 'Leave setup mode' : 'Enter setup mode'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {batteryRaw !== undefined && !lithium && (
+        <div className="banner">
+          <span className="icon" aria-hidden="true">
+            !
+          </span>
+          <div className="body">
+            A <strong>lead-acid profile</strong> is selected. For a 16-cell LiFePO4 bank,{' '}
+            <strong>L16</strong> is the match. Avoid <strong>USE</strong> — it makes
+            equalization effective and equalization defaults to enabled, which is harmful
+            to lithium.
+          </div>
+        </div>
+      )}
+
+      {GROUPS.filter((g) => g.setup).map((group) => (
+        <section key={group.title}>
+          <h2>{group.title}</h2>
+          <p className="desc">{group.desc}</p>
+          {group.keys
+            .map((key) => byKey.get(key))
+            .filter((def): def is RegisterDef => Boolean(def))
+            .map((def) => (
+              <Row
+                key={def.key}
+                def={def}
+                registers={registers}
+                enabled={unlocked && setupMode}
                 onWritten={onWritten}
               />
             ))}

@@ -23,6 +23,25 @@
 export type Confidence = 'high' | 'medium' | 'low';
 export type Kind = 'live' | 'setting' | 'info';
 
+/**
+ * Write tiers.
+ *
+ * `normal`  — operational settings: currents, thresholds, cutoff voltages.
+ *             Gated behind the ordinary write unlock.
+ * `setup`   — parameters that redefine the battery itself. Changing one of
+ *             these makes the inverter rewrite a whole group of other
+ *             registers, so it gets its own stricter gate.
+ */
+export type Tier = 'normal' | 'setup';
+
+export interface EnumOption {
+  value: number;
+  code: string;
+  label: string;
+  /** Shown prominently when this option is selected but not yet committed. */
+  warn?: string;
+}
+
 export interface RegisterDef {
   key: string;
   addr: number;
@@ -34,6 +53,14 @@ export interface RegisterDef {
   unit?: string;
   confidence: Confidence;
   writable?: boolean;
+  tier?: Tier;
+  /** Present for enumerated registers — renders a picker instead of a number. */
+  options?: EnumOption[];
+  /**
+   * Registers the device rewrites as a side effect of changing this one.
+   * The UI reports what actually moved after the write.
+   */
+  cascades?: number[];
   /** Bounds in DISPLAY units, taken from the manual's stated setting ranges. */
   min?: number;
   max?: number;
@@ -51,6 +78,36 @@ export interface RegisterDef {
 export const SETTING_VOLT = 0.4;
 export const LIVE_VOLT = 0.1;
 export const TENTHS = 0.1;
+
+/**
+ * [08] battery type, at 0x1002. Index order follows the manual's option list.
+ *
+ * Index 3 = GEL is corroborated rather than assumed from position: the manual
+ * documents GEL as constant-charge 56.8 V / float 55.2 V, and a unit reading 3
+ * here also reads 142 (56.8 V) at 0x1007 and 138 (55.2 V) at 0x1008 — an exact
+ * match on both values.
+ *
+ * Declared before REGISTERS because the register table references it during
+ * module initialisation.
+ */
+export const BATTERY_TYPE_OPTIONS: EnumOption[] = [
+  {
+    value: 0,
+    code: 'USE',
+    label: 'User-defined',
+    warn:
+      'User-defined makes equalization effective, and equalization defaults to ENABLED. ' +
+      'Equalizing a LiFePO4 pack is harmful. Prefer L16 for a 16S lithium bank.',
+  },
+  { value: 1, code: 'SLd', label: 'Sealed lead-acid — 57.6 V charge / 55.2 V float' },
+  { value: 2, code: 'FLd', label: 'Flooded lead-acid — 58.4 V charge / 55.2 V float' },
+  { value: 3, code: 'GEL', label: 'GEL lead-acid — 56.8 V charge / 55.2 V float' },
+  { value: 4, code: 'L14', label: 'LiFePO4 14 cells — 49.6 V charge' },
+  { value: 5, code: 'L15', label: 'LiFePO4 15 cells — 53.2 V charge' },
+  { value: 6, code: 'L16', label: 'LiFePO4 16 cells — 56.8 V charge' },
+  { value: 7, code: 'N13', label: 'Ternary lithium 13 cells — 53.2 V charge' },
+  { value: 8, code: 'N14', label: 'Ternary lithium 14 cells — 57.6 V charge' },
+];
 
 export const REGISTERS: RegisterDef[] = [
   // ---------------------------------------------------------------- live ----
@@ -436,42 +493,31 @@ export const REGISTERS: RegisterDef[] = [
     key: 'batteryType',
     addr: 0x1002,
     label: 'Battery type',
-    kind: 'info',
+    kind: 'setting',
+    setting: '[08]',
     scale: 1,
     decimals: 0,
     confidence: 'high',
+    writable: true,
+    tier: 'setup',
+    options: BATTERY_TYPE_OPTIONS,
+    cascades: [0x1006, 0x1007, 0x1008],
     note:
-      'Read-only here deliberately: changing it reshapes the whole charge profile. ' +
-      'Set it on the LCD, where the consequences are visible.',
+      'Selecting a type makes the inverter rewrite the charge profile — constant-charge, ' +
+      'boost and float voltages all move. The app reports exactly what changed afterwards.',
   },
 ];
 
-/**
- * [08] battery type. Index order follows the manual's option list.
- *
- * Index 3 = GEL is corroborated independently: the manual documents GEL as
- * constant-charge 56.8 V / float 55.2 V, and a unit reading 3 here also reads
- * 142 (56.8 V) at 0x1007 and 138 (55.2 V) at 0x1008 — an exact match on both.
- *
- * L16 is the correct choice for a 16S LiFePO4 bank. Note that USE (user-defined)
- * makes equalization effective, and equalization defaults to ENABLED — which is
- * actively harmful to LiFePO4. GEL, FLd and the lithium modes do not equalize.
- */
-export const BATTERY_TYPES: Record<number, { code: string; label: string; lithium: boolean }> = {
-  0: { code: 'USE', label: 'User-defined', lithium: false },
-  1: { code: 'SLd', label: 'Sealed lead-acid (57.6 V / 55.2 V)', lithium: false },
-  2: { code: 'FLd', label: 'Flooded lead-acid (58.4 V / 55.2 V)', lithium: false },
-  3: { code: 'GEL', label: 'GEL lead-acid (56.8 V / 55.2 V)', lithium: false },
-  4: { code: 'L14', label: 'LiFePO4 14S (49.6 V)', lithium: true },
-  5: { code: 'L15', label: 'LiFePO4 15S (53.2 V)', lithium: true },
-  6: { code: 'L16', label: 'LiFePO4 16S (56.8 V)', lithium: true },
-  7: { code: 'N13', label: 'Ternary lithium 13S (53.2 V)', lithium: true },
-  8: { code: 'N14', label: 'Ternary lithium 14S (57.6 V)', lithium: true },
-};
+/** Codes 4-8 are the lithium profiles; 0-3 are lead-acid or user-defined. */
+export function isLithiumBatteryType(raw: number | undefined): boolean {
+  return raw !== undefined && raw >= 4 && raw <= 8;
+}
 
 export function describeBatteryType(raw: number | undefined) {
   if (raw === undefined) return undefined;
-  return BATTERY_TYPES[raw];
+  const option = BATTERY_TYPE_OPTIONS.find((o) => o.value === raw);
+  if (!option) return undefined;
+  return { ...option, lithium: isLithiumBatteryType(raw) };
 }
 
 /** Blocks the poller reads each cycle. Everything above must fall inside one. */

@@ -67,6 +67,30 @@ damage:
 
 Do not add a code path that bypasses the `expect` guard.
 
+### Write tiers
+
+Settings are split into two tiers, because they are not equally consequential.
+
+| Tier | Gate | Contents |
+|---|---|---|
+| `normal` | Unlock writes | Currents, cutoff voltages, SOC thresholds |
+| `setup` | Unlock writes **and** Setup mode | Battery type |
+
+**Setup mode** is a second, separately-armed gate with its own confirmation step. It
+exists because a `setup` register does not change one value — changing the battery type
+makes the inverter immediately rewrite its constant-charge, boost and float voltages to
+that profile's defaults, discarding anything tuned by hand.
+
+Registers that cascade declare it (`cascades: [...]` in the map). After such a write the
+app diffs those registers and reports what the inverter actually rewrote, for example:
+
+```
+✓ wrote L16; device now reads L16
+Charge profile rewritten by the inverter: Float voltage 55.2V → 54.4V
+```
+
+Leaving setup mode is one click; locking writes exits setup mode too.
+
 ## Confidence
 
 Each register carries a confidence level, shown in the UI:
