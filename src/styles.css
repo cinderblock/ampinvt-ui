@@ -1,0 +1,400 @@
+/*
+ * Palette and ink follow the house data-viz reference instance.
+ * Status colours are the fixed status palette and are never themed. They are
+ * always paired with an icon and a text label — colour never carries meaning
+ * on its own, which also covers the sub-3:1 light-surface cases.
+ */
+
+:root {
+  color-scheme: light;
+
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --hairline: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+
+  --accent: #2a78d6;
+
+  --radius: 10px;
+  --gap: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --hairline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --accent: #3987e5;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --hairline: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 20px 60px;
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+header.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 18px;
+}
+
+h1 {
+  font-size: 17px;
+  margin: 0;
+  font-weight: 650;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---------------------------------------------------------------- status -- */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+
+.status .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.status.good .dot {
+  background: var(--status-good);
+}
+.status.warning .dot {
+  background: var(--status-warning);
+}
+.status.critical .dot {
+  background: var(--status-critical);
+}
+.status.idle .dot {
+  background: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- input -- */
+
+button,
+select,
+input {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--baseline);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 550;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  border-color: var(--status-critical);
+  color: var(--status-critical);
+}
+
+/* ------------------------------------------------------------------ tabs -- */
+
+nav.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+nav.tabs button {
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+}
+
+nav.tabs button[aria-selected='true'] {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* ------------------------------------------------------------ stat tiles -- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--gap);
+  margin-bottom: 22px;
+}
+
+.tile {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.tile .label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.tile .value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tile .unit {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 3px;
+}
+
+.tile .hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 5px;
+}
+
+/* --------------------------------------------------------------- section -- */
+
+section {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+
+section > h2 {
+  font-size: 14px;
+  margin: 0 0 4px;
+  font-weight: 650;
+}
+
+section > .desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 14px;
+}
+
+/* --------------------------------------------------------------- setting -- */
+
+.setting {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.setting:first-of-type {
+  border-top: none;
+}
+
+.setting .name {
+  font-weight: 550;
+}
+
+.setting .meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.setting .note {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  max-width: 62ch;
+}
+
+.setting input[type='number'] {
+  width: 96px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.setting .current {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 84px;
+  text-align: right;
+}
+
+/* Confidence is spelled out in words, never colour alone. */
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.badge.medium {
+  border-color: var(--status-warning);
+}
+
+.badge.low {
+  border-color: var(--status-serious);
+}
+
+/* ---------------------------------------------------------------- banner -- */
+
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--status-warning);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background: var(--surface-1);
+  font-size: 13px;
+}
+
+.banner.critical {
+  border-left-color: var(--status-critical);
+}
+
+.banner .icon {
+  font-weight: 700;
+  flex: none;
+}
+
+.banner .body {
+  color: var(--text-secondary);
+}
+
+.banner .body strong {
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------ raw --- */
+
+table.raw {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+table.raw th,
+table.raw td {
+  text-align: right;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+table.raw th:first-child,
+table.raw td:first-child {
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+table.raw th {
+  color: var(--text-muted);
+  font-weight: 550;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.err {
+  color: var(--status-critical);
+  font-size: 13px;
+}
