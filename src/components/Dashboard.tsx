@@ -2,6 +2,7 @@ import {
   BUILD_STRING_RANGE,
   REGISTERS,
   decodeAscii,
+  describeBatteryType,
   formatValue,
   type RegisterDef,
 } from '../registers';
@@ -44,8 +45,32 @@ export default function Dashboard({ registers, connected }: Props) {
     (registers.get(0x0501) ?? 0) <= 1 &&
     (registers.get(0x0502) ?? 0) === 0;
 
+  const battery = describeBatteryType(registers.get(0x1002));
+  const boost = registers.get(0x1007);
+  const float = registers.get(0x1008);
+
   return (
     <>
+      {connected && battery && !battery.lithium && (
+        <div className="banner">
+          <span className="icon" aria-hidden="true">
+            !
+          </span>
+          <div className="body">
+            <strong>Charge profile is set to {battery.code} — a lead-acid profile.</strong>{' '}
+            {boost !== undefined && float !== undefined && (
+              <>
+                Charging stops at {(boost * 0.4).toFixed(1)} V and then floats at{' '}
+                {(float * 0.4).toFixed(1)} V.{' '}
+              </>
+            )}
+            On a 16S LiFePO4 bank the float is the problem — holding 3.45 V/cell
+            indefinitely is hard on the cells. <strong>L16</strong> is the matching
+            lithium profile. Change it on the LCD, not here.
+          </div>
+        </div>
+      )}
+
       {idle && (
         <div className="banner">
           <span className="icon" aria-hidden="true">
@@ -81,6 +106,26 @@ export default function Dashboard({ registers, connected }: Props) {
                 </td>
               </tr>
             ))}
+            <tr>
+              <td>Battery type</td>
+              <td>
+                {battery ? (
+                  <>
+                    <span className="mono">{battery.code}</span> — {battery.label}
+                  </>
+                ) : (
+                  '—'
+                )}
+              </td>
+            </tr>
+            <tr>
+              <td>Charge stops at</td>
+              <td>{boost !== undefined ? `${(boost * 0.4).toFixed(1)} V` : '—'}</td>
+            </tr>
+            <tr>
+              <td>Then floats at</td>
+              <td>{float !== undefined ? `${(float * 0.4).toFixed(1)} V` : '—'}</td>
+            </tr>
             <tr>
               <td>Firmware build</td>
               <td className="mono">{build || '—'}</td>

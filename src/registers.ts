@@ -432,7 +432,47 @@ export const REGISTERS: RegisterDef[] = [
     unit: 'V',
     confidence: 'high',
   },
+  {
+    key: 'batteryType',
+    addr: 0x1002,
+    label: 'Battery type',
+    kind: 'info',
+    scale: 1,
+    decimals: 0,
+    confidence: 'high',
+    note:
+      'Read-only here deliberately: changing it reshapes the whole charge profile. ' +
+      'Set it on the LCD, where the consequences are visible.',
+  },
 ];
+
+/**
+ * [08] battery type. Index order follows the manual's option list.
+ *
+ * Index 3 = GEL is corroborated independently: the manual documents GEL as
+ * constant-charge 56.8 V / float 55.2 V, and a unit reading 3 here also reads
+ * 142 (56.8 V) at 0x1007 and 138 (55.2 V) at 0x1008 — an exact match on both.
+ *
+ * L16 is the correct choice for a 16S LiFePO4 bank. Note that USE (user-defined)
+ * makes equalization effective, and equalization defaults to ENABLED — which is
+ * actively harmful to LiFePO4. GEL, FLd and the lithium modes do not equalize.
+ */
+export const BATTERY_TYPES: Record<number, { code: string; label: string; lithium: boolean }> = {
+  0: { code: 'USE', label: 'User-defined', lithium: false },
+  1: { code: 'SLd', label: 'Sealed lead-acid (57.6 V / 55.2 V)', lithium: false },
+  2: { code: 'FLd', label: 'Flooded lead-acid (58.4 V / 55.2 V)', lithium: false },
+  3: { code: 'GEL', label: 'GEL lead-acid (56.8 V / 55.2 V)', lithium: false },
+  4: { code: 'L14', label: 'LiFePO4 14S (49.6 V)', lithium: true },
+  5: { code: 'L15', label: 'LiFePO4 15S (53.2 V)', lithium: true },
+  6: { code: 'L16', label: 'LiFePO4 16S (56.8 V)', lithium: true },
+  7: { code: 'N13', label: 'Ternary lithium 13S (53.2 V)', lithium: true },
+  8: { code: 'N14', label: 'Ternary lithium 14S (57.6 V)', lithium: true },
+};
+
+export function describeBatteryType(raw: number | undefined) {
+  if (raw === undefined) return undefined;
+  return BATTERY_TYPES[raw];
+}
 
 /** Blocks the poller reads each cycle. Everything above must fall inside one. */
 export const POLL_BLOCKS: { addr: number; count: number }[] = [
