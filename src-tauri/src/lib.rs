@@ -183,6 +183,8 @@ fn discover_blocks(link: State<Link>, stride: u16) -> Result<Vec<u16>, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(Link::default())
         .invoke_handler(tauri::generate_handler![
             list_ports,

@@ -1,0 +1,80 @@
+name: Release
+
+# Releases are built and published exclusively from CI. Never publish from a
+# workstation: CI gives a reproducible build from a clean checkout and an
+# auditable record tied to a specific commit, and keeps the signing key in repo
+# secrets rather than on a laptop.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run tsc --noEmit
+
+      - name: Rust tests
+        working-directory: ./src-tauri
+        run: cargo test
+
+      - name: Verify tag matches the version in tauri.conf.json
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag=$TAG  tauri.conf.json=$CONF"
+          if [ "$TAG" != "v$CONF" ]; then
+            echo "::error::Tag $TAG does not match tauri.conf.json version $CONF"
+            exit 1
+          fi
+
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing key lives only in repo secrets. The app verifies this
+          # signature before installing any update.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'AMPINVT UI __VERSION__'
+          releaseBody: |
+            Desktop app for monitoring and configuring an AMPINVT TEL-series solar inverter.
+
+            Download the `.exe` installer below. Once installed, the app updates itself —
+            check the **Updates** tab, where automatic installation can be enabled.
+          releaseDraft: false
+          prerelease: false
+          # tauri-action generates latest.json alongside the installer; that file
+          # is what the updater endpoint in tauri.conf.json points at.
+          includeUpdaterJson: true

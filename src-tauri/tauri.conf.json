@@ -23,9 +23,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/cinderblock/ampinvt-ui/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdENzcyMzhERjA4OTI1NDAKUldSQUpZbndqU04zZlhOY2poenVuL2w0S1BGOFN6c3o4OHk1YVpleEtNZkVSYzNMTXRGTzNpUEYK"
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

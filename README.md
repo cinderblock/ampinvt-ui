@@ -37,18 +37,66 @@ Modbus RTU. Adding a second inverter should be a new map, not a rewrite.
 | Write | function `0x06` |
 | Poll rate | 1 Hz — the bus does not like being pushed harder |
 
-## Running it
+## Installing
+
+Grab the `.exe` installer from the [latest release](https://github.com/cinderblock/ampinvt-ui/releases/latest).
+After that the app updates itself — see below.
+
+## Running from source
 
 ```sh
 bun install
 bun run tauri dev
 ```
 
-Release build:
+Note that update checks **fail under `tauri dev`**. There is no signed bundle to compare
+against outside a real install, so the Updates tab reports an error there. That is
+expected.
+
+## Updates
+
+The app checks GitHub Releases on launch and every six hours, and verifies the release
+signature before installing anything.
+
+**Automatic installation is opt-in and off by default.** When enabled, an available
+update installs itself once the app has been idle for a configurable period (default
+5 minutes, measured from the last mouse/keyboard/focus event).
+
+It will **not** install automatically while:
+
+- writes are unlocked, or
+- a guarded write is in flight
+
+Installing requires a restart, and restarting mid-configuration of a 5 kW converter is
+not acceptable. Those conditions are surfaced in the Updates tab when they hold off an
+install. Manual "Install and restart" ignores them — that is an explicit choice.
+
+## Releasing
+
+Releases are built and published **exclusively from CI** — see
+[`.github/workflows/release.yml`](.github/workflows/release.yml). CI gives a reproducible
+build from a clean checkout, an auditable record tied to a commit, and keeps the signing
+key in repo secrets rather than on a workstation.
+
+To cut a release: bump `version` in `src-tauri/tauri.conf.json`, commit, then
 
 ```sh
-bun run tauri build
+git tag v0.1.0 && git push origin v0.1.0
 ```
+
+The workflow refuses to build if the tag and the config version disagree. It can also be
+run manually via `workflow_dispatch`.
+
+Required repo secrets:
+
+| Secret | Purpose |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | minisign key the updater verifies against |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | empty for a `--ci`-generated key |
+
+The matching **public** key is committed in `src-tauri/tauri.conf.json`. Losing the
+private key means installed clients can no longer verify updates from a new key — keep a
+backup.
 
 ## Safety model
 

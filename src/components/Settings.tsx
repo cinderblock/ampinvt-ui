@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { writeRegister, type WriteReport } from '../api';
+import { useSafety } from '../safety';
 import {
   REGISTERS,
   formatValue,
@@ -85,6 +86,7 @@ function Row({
   const [cascadeBefore, setCascadeBefore] = useState<Map<number, number> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const { beginWrite, endWrite } = useSafety();
 
   const editable = enabled && def.writable && raw !== undefined;
   const isEnum = Boolean(def.options);
@@ -111,6 +113,7 @@ function Row({
     if (nextRaw === undefined || raw === undefined) return;
     setPending(true);
     setError(null);
+    beginWrite();
     if (def.cascades) {
       setCascadeBefore(new Map(def.cascades.map((a) => [a, registers.get(a) ?? -1])));
     }
@@ -126,6 +129,7 @@ function Row({
       setCascadeBefore(null);
     } finally {
       setPending(false);
+      endWrite();
     }
   };
 
@@ -258,7 +262,9 @@ function Row({
 }
 
 export default function Settings({ registers, connected, onWritten }: Props) {
-  const [unlocked, setUnlocked] = useState(false);
+  // Write-unlock lives in shared state so the auto-updater can refuse to
+  // relaunch the app while settings are unlocked.
+  const { writesUnlocked: unlocked, setWritesUnlocked: setUnlocked } = useSafety();
   const [setupMode, setSetupMode] = useState(false);
   const [armingSetup, setArmingSetup] = useState(false);
   const byKey = new Map(REGISTERS.map((r) => [r.key, r]));

@@ -3,12 +3,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './styles.css';
 import { POLL_BLOCKS } from './registers';
 import { readBlocks, toRegisterMap, type BlockResult } from './api';
+import { SafetyProvider, useSafety } from './safety';
+import { loadPrefs, useUpdater, type UpdatePrefs } from './updater';
 import ConnectionBar from './components/ConnectionBar';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
 import RawExplorer from './components/RawExplorer';
+import Updates from './components/Updates';
 
-type Tab = 'dashboard' | 'settings' | 'raw';
+type Tab = 'dashboard' | 'settings' | 'raw' | 'updates';
 
 /**
  * The inverter's bus does not like being polled hard. One second is the
@@ -17,13 +20,17 @@ type Tab = 'dashboard' | 'settings' | 'raw';
  */
 const POLL_MS = 1000;
 
-export default function App() {
+function Shell() {
   const [connected, setConnected] = useState(false);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [registers, setRegisters] = useState<Map<number, number>>(new Map());
   const [blocks, setBlocks] = useState<BlockResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lastRead, setLastRead] = useState<Date | null>(null);
+  const [prefs, setPrefs] = useState<UpdatePrefs>(() => loadPrefs());
+
+  const { interruptUnsafe } = useSafety();
+  const updater = useUpdater({ prefs, interruptUnsafe });
 
   /** Guards against overlapping polls when a read runs long. */
   const inFlight = useRef(false);
@@ -73,6 +80,21 @@ export default function App() {
         />
       </header>
 
+      {updater.phase === 'available' && tab !== 'updates' && (
+        <div className="banner">
+          <span className="icon" aria-hidden="true">
+            ↑
+          </span>
+          <div className="body">
+            <strong>Version {updater.update?.version} is available.</strong>{' '}
+            <button onClick={() => setTab('updates')}>Show</button>{' '}
+            <button className="primary" onClick={() => void updater.install()}>
+              Install and restart
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="banner critical">
           <span className="icon" aria-hidden="true">
@@ -94,9 +116,13 @@ export default function App() {
         <button role="tab" aria-selected={tab === 'raw'} onClick={() => setTab('raw')}>
           Raw registers
         </button>
+        <button role="tab" aria-selected={tab === 'updates'} onClick={() => setTab('updates')}>
+          Updates
+          {updater.phase === 'available' && ' •'}
+        </button>
       </nav>
 
-      {!connected && (
+      {!connected && tab !== 'updates' && (
         <div className="banner">
           <span className="icon" aria-hidden="true">
             !
@@ -113,6 +139,29 @@ export default function App() {
         <Settings registers={registers} connected={connected} onWritten={() => void poll()} />
       )}
       {tab === 'raw' && <RawExplorer blocks={blocks} />}
+      {tab === 'updates' && (
+        <Updates
+          prefs={prefs}
+          onPrefsChange={setPrefs}
+          phase={updater.phase}
+          version={updater.update?.version}
+          currentVersion={updater.update?.currentVersion}
+          notes={updater.update?.body}
+          error={updater.error}
+          progress={updater.progress}
+          lastChecked={updater.lastChecked}
+          onCheck={() => void updater.check()}
+          onInstall={() => void updater.install()}
+        />
+      )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <SafetyProvider>
+      <Shell />
+    </SafetyProvider>
   );
 }
