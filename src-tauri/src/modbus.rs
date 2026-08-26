@@ -77,13 +77,25 @@ fn normalize(path: &str) -> String {
 
 impl Rtu {
     pub fn open(path: &str, baud: u32, slave: u8) -> Result<Self, ModbusError> {
-        let port = serialport::new(normalize(path), baud)
+        let mut port = serialport::new(normalize(path), baud)
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
             .stop_bits(serialport::StopBits::One)
+            .flow_control(serialport::FlowControl::None)
             .timeout(Duration::from_millis(500))
             .open()
             .map_err(|e| ModbusError::Io(e.to_string()))?;
+
+        // pyserial asserts both of these on open and that configuration is the
+        // one proven to work against this inverter; the serialport crate does
+        // not, so assert them explicitly rather than rely on the default.
+        // Failure is not fatal — plenty of adapters ignore the lines entirely.
+        let _ = port.write_data_terminal_ready(true);
+        let _ = port.write_request_to_send(true);
+        // Let the CH340 settle after the control lines move before the first
+        // frame goes out, or the opening request can be swallowed.
+        std::thread::sleep(Duration::from_millis(50));
+
         Ok(Rtu { port, slave })
     }
 

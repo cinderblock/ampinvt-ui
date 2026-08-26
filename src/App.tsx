@@ -36,6 +36,8 @@ function Shell() {
   /** Guards against overlapping polls when a read runs long. */
   const inFlight = useRef(false);
 
+  const failedBlocks = blocks.filter((b) => b.error !== null);
+
   const poll = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -110,6 +112,33 @@ function Shell() {
           </span>
           <div className="body">
             <strong>Read failed.</strong> {error}
+          </div>
+        </div>
+      )}
+
+      {/*
+        Per-block failures used to render as "—" and nothing else, which is
+        indistinguishable from "no data yet" — a total read failure could look
+        like an empty screen with no error at all. Surface them.
+      */}
+      {failedBlocks.length > 0 && (
+        <div className="banner critical">
+          <span className="icon" aria-hidden="true">
+            ✕
+          </span>
+          <div className="body">
+            <strong>
+              {failedBlocks.length === blocks.length
+                ? 'Every register block failed to read.'
+                : `${failedBlocks.length} of ${blocks.length} register blocks failed to read.`}
+            </strong>{' '}
+            Values shown as <span className="mono">—</span> are missing, not zero.
+            <br />
+            {failedBlocks.map((b) => (
+              <span key={b.addr} className="mono" style={{ marginRight: 12 }}>
+                0x{b.addr.toString(16).padStart(4, '0')}: {b.error}
+              </span>
+            ))}
           </div>
         </div>
       )}
