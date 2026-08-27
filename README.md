@@ -38,6 +38,25 @@ Modbus RTU. Adding a second inverter should be a new map, not a rewrite.
 | **Inter-frame gap** | **50 ms — mandatory, see below** |
 | Poll rate | live blocks 1 Hz, settings 15 s |
 
+### Frames get lost, so reads retry
+
+Forensics on a real stall found **95 of 179 sweeps dropped at least one block**, climbing
+in frequency for twenty minutes before the link failed completely — while the inverter was
+charging hard at 20 A. Readings were rock steady throughout; there was no drift, the link
+simply shed frames until it shed all of them.
+
+Reads therefore retry up to three times. **Modbus exceptions are not retried** — an
+exception is the device answering correctly to say an address does not exist, and it will
+say so just as firmly the second time.
+
+Ground offset is *not* the cause: the host is a laptop, galvanically floating, so a USB
+isolator would change nothing. The leading candidate is EMI coupled into the cable from a
+converter switching kilowatts a metre away, with MCU starvation under load and thermal
+drift as alternatives. All three are transient, which is what makes retrying effective.
+
+Worth doing physically: ferrite chokes on the USB cable, keep it away from battery and AC
+runs, and use the shortest cable that reaches.
+
 ### The inter-frame gap is not optional
 
 Modbus RTU only requires 3.5 character times between frames — about 3.65 ms at

@@ -199,6 +199,37 @@ impl Rtu {
         Ok(frame)
     }
 
+    /// Read a block, retrying a few times before giving up.
+    ///
+    /// A Modbus master is expected to retry — frames get lost. This one loses
+    /// them measurably: forensics on a real stall found 95 of 179 sweeps
+    /// dropping at least one block, climbing for twenty minutes before the link
+    /// failed altogether, while the inverter was converting hard. Whatever the
+    /// cause (EMI coupled into the cable is the leading candidate now that
+    /// ground offset is ruled out — the host is a floating laptop), the loss is
+    /// transient, and a single retry recovers most of it.
+    ///
+    /// Exception replies are NOT retried. A Modbus exception is the device
+    /// answering correctly to say the address does not exist, which it will say
+    /// just as firmly the second time; retrying those would triple the cost of
+    /// every block-discovery sweep for nothing.
+    pub fn read_holding_retry(
+        &mut self,
+        addr: u16,
+        count: u16,
+        attempts: u8,
+    ) -> Result<Vec<u16>, ModbusError> {
+        let mut last = ModbusError::Timeout;
+        for _ in 0..attempts.max(1) {
+            match self.read_holding(addr, count) {
+                Ok(values) => return Ok(values),
+                Err(ModbusError::Exception(code)) => return Err(ModbusError::Exception(code)),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
     /// Function 0x03 — read holding registers. This device implements only 0x03;
     /// 0x04 (input registers) is silent on every address.
     pub fn read_holding(&mut self, addr: u16, count: u16) -> Result<Vec<u16>, ModbusError> {

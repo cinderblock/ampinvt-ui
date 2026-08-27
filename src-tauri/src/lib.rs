@@ -233,7 +233,7 @@ async fn read_blocks(
 
         Ok(blocks
             .into_iter()
-            .map(|spec| match rtu.read_holding(spec.addr, spec.count) {
+            .map(|spec| match rtu.read_holding_retry(spec.addr, spec.count, 3) {
                 Ok(values) => BlockResult {
                     addr: spec.addr,
                     values: Some(values),

@@ -252,7 +252,7 @@ pub fn spawn(
                 match guard.as_mut() {
                     Some(rtu) => {
                         connected = true;
-                        match rtu.read_holding(*addr, *count) {
+                        match rtu.read_holding_retry(*addr, *count, 3) {
                             Ok(regs) => {
                                 for (i, v) in regs.iter().enumerate() {
                                     values.insert(addr + i as u16, *v);
