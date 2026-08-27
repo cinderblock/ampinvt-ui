@@ -14,8 +14,15 @@ const SLAVE = 1;
 const AUTO_KEY = 'ampinvt-ui.auto-connect';
 const PORT_KEY = 'ampinvt-ui.last-port';
 
-/** How often to re-attempt auto-connect while it has never succeeded. */
-const AUTO_RETRY_MS = 15000;
+/**
+ * Auto-connect retry backoff. It starts short because the usual reason the first
+ * attempt fails is that something is still settling — the serial driver has not
+ * finished enumerating after a boot, or the previous process has not yet let go
+ * of the port. Those clear in a second or two, and waiting a fixed 15s for them
+ * looks indistinguishable from the app being broken.
+ */
+const AUTO_RETRY_START_MS = 1500;
+const AUTO_RETRY_MAX_MS = 15000;
 
 export function loadAutoConnect(): boolean {
   // Default on: the common case is a machine left running to log, where nobody
@@ -93,26 +100,36 @@ export default function ConnectionBar({ connected, onConnectedChange, lastRead }
   };
 
   useEffect(() => {
-    if (connected || autoGaveUp.current || !loadAutoConnect()) return undefined;
+    // Depends on the autoConnect *state*, not a fresh read of localStorage.
+    // Reading storage here meant ticking the checkbox did not start anything:
+    // the effect had no reason to re-run, so the setting only took hold on the
+    // next launch, and until then the box was ticked while nothing was trying.
+    if (connected || autoGaveUp.current || !autoConnect) return undefined;
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = AUTO_RETRY_START_MS;
+
     const attempt = async () => {
       if (cancelled || autoGaveUp.current) return;
       const found = await refresh();
       const target = choosePort(found);
       if (target && !cancelled) await open(target.path);
+      // Reschedule from the end of the attempt rather than on a fixed interval,
+      // so a slow or hanging open cannot stack overlapping attempts on a port
+      // that only tolerates one holder.
+      if (cancelled || autoGaveUp.current) return;
+      timer = setTimeout(() => void attempt(), delay);
+      delay = Math.min(delay * 2, AUTO_RETRY_MAX_MS);
     };
 
     void attempt();
-    // Keep trying. The port being briefly unavailable at launch must not leave
-    // the app permanently idle with nobody there to notice.
-    const id = setInterval(() => void attempt(), AUTO_RETRY_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected]);
+  }, [connected, autoConnect]);
 
   const toggle = async () => {
     if (!connected) {
@@ -176,6 +193,9 @@ export default function ConnectionBar({ connected, onConnectedChange, lastRead }
           type="checkbox"
           checked={autoConnect}
           onChange={(e) => {
+            // Ticking the box is itself a request to connect, so it clears an
+            // earlier deliberate Disconnect rather than being silently ignored.
+            if (e.target.checked) autoGaveUp.current = false;
             setAutoConnect(e.target.checked);
             localStorage.setItem(AUTO_KEY, String(e.target.checked));
           }}
