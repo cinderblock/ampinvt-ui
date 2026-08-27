@@ -72,6 +72,9 @@ fn file_for(dir: &Path, utc_day: &str) -> PathBuf {
 pub struct Logger {
     pub running: Arc<AtomicBool>,
     pub records: Arc<AtomicU64>,
+    /// Sweeps that produced no usable data. Surfaced so a device going mute is
+    /// visible in the UI rather than only discoverable by reading the log.
+    pub failures: Arc<AtomicU64>,
     pub path: Mutex<Option<PathBuf>>,
     pub last_error: Arc<Mutex<Option<String>>>,
 }
@@ -82,6 +85,8 @@ pub struct LoggingStatus {
     /// Directory holding the daily files, not a single file.
     pub path: Option<String>,
     pub records: u64,
+    /// Sweeps that produced no usable data.
+    pub failures: u64,
     /// Total across every daily file, not just today's.
     pub bytes: u64,
     pub files: u64,
@@ -122,6 +127,10 @@ fn utc_now() -> String {
     )
 }
 
+fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool) -> String {
     let mut line = String::with_capacity(regs.len() * 12 + 48);
     line.push_str("{\"t\":\"");
@@ -139,6 +148,22 @@ fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool) -> String {
     }
     line.push_str("}}\n");
     line
+}
+
+/// A sweep that produced no usable data.
+///
+/// Recording these is the whole point. The first version only wrote a record
+/// when a read *succeeded*, so a device that went mute produced no records at
+/// all — indistinguishable from the app never having run, with no timestamp for
+/// when it stopped and no reason. A silence has to leave evidence.
+fn encode_failure(stamp: &str, failed: usize, total: usize, reason: &str, note: Option<&str>) -> String {
+    let extra = note
+        .map(|n| format!(",\"note\":\"{}\"", escape(n)))
+        .unwrap_or_default();
+    format!(
+        "{{\"t\":\"{stamp}\",\"ok\":false,\"failed\":{failed},\"blocks\":{total},\"err\":\"{}\"{extra}}}\n",
+        escape(reason)
+    )
 }
 
 /// Total bytes and file count across every daily log in the directory.
@@ -160,8 +185,16 @@ fn tally(dir: &Path) -> (u64, u64) {
     (bytes, files)
 }
 
+/// Consecutive failed sweeps before reopening the serial port.
+///
+/// A wedged driver handle and a mute device look identical from here, and
+/// reopening is the only way to tell them apart: the handle recovers, the
+/// device does not. Cheap enough to be worth trying, rare enough not to thrash.
+const REOPEN_AFTER: u32 = 3;
+
 pub fn spawn(
     link: Arc<Mutex<Option<crate::modbus::Rtu>>>,
+    params: Arc<Mutex<Option<crate::ConnParams>>>,
     logger: Arc<Logger>,
     dir: PathBuf,
     interval: Duration,
@@ -170,12 +203,15 @@ pub fn spawn(
         let mut previous: BTreeMap<u16, u16> = BTreeMap::new();
         let mut since_full: u64 = 0;
         let mut current_day = String::new();
+        let mut consecutive_failures: u32 = 0;
 
         while logger.running.load(Ordering::Relaxed) {
             let started = Instant::now();
 
             let mut values: BTreeMap<u16, u16> = BTreeMap::new();
             let mut connected = false;
+            let mut failed_blocks = 0usize;
+            let mut first_error: Option<String> = None;
 
             // Take the lock per block, not for the whole sweep.
             //
@@ -199,9 +235,17 @@ pub fn spawn(
                 match guard.as_mut() {
                     Some(rtu) => {
                         connected = true;
-                        if let Ok(regs) = rtu.read_holding(*addr, *count) {
-                            for (i, v) in regs.iter().enumerate() {
-                                values.insert(addr + i as u16, *v);
+                        match rtu.read_holding(*addr, *count) {
+                            Ok(regs) => {
+                                for (i, v) in regs.iter().enumerate() {
+                                    values.insert(addr + i as u16, *v);
+                                }
+                            }
+                            Err(e) => {
+                                failed_blocks += 1;
+                                if first_error.is_none() {
+                                    first_error = Some(format!("{:#06x}: {e}", addr));
+                                }
                             }
                         }
                     }
@@ -210,26 +254,30 @@ pub fn spawn(
                 drop(guard);
             }
 
-            if connected && !values.is_empty() {
-                let stamp = utc_now();
-                let day = stamp[..10].to_string();
+            let stamp = utc_now();
+            let day = stamp[..10].to_string();
 
-                // A new UTC day starts a new file. Nothing is deleted, ever.
-                // Each file must stand alone, so the day roll forces a full
-                // snapshot rather than a delta against yesterday's last state.
-                if day != current_day {
-                    previous.clear();
-                    since_full = 0;
-                    current_day = day.clone();
-                }
-                let path = file_for(&dir, &day);
+            // A new UTC day starts a new file. Nothing is deleted, ever.
+            // Each file must stand alone, so the day roll forces a full
+            // snapshot rather than a delta against yesterday's last state.
+            if day != current_day {
+                previous.clear();
+                since_full = 0;
+                current_day = day.clone();
+            }
+            let path = file_for(&dir, &day);
 
+            // Every sweep writes a record, successful or not. A device that
+            // goes mute must leave a timestamped trail — otherwise the failure
+            // is invisible and there is nothing to correlate against later.
+            let (line, succeeded) = if connected && !values.is_empty() {
                 // Full snapshot on the first record, periodically thereafter,
                 // and whenever the set of readable registers changes — a delta
                 // against a different key set would be ambiguous to replay.
-                let key_set_changed = previous.len() != values.len()
-                    || previous.keys().ne(values.keys());
-                let full = previous.is_empty() || since_full >= FULL_SNAPSHOT_EVERY
+                let key_set_changed =
+                    previous.len() != values.len() || previous.keys().ne(values.keys());
+                let full = previous.is_empty()
+                    || since_full >= FULL_SNAPSHOT_EVERY
                     || key_set_changed;
 
                 let payload: BTreeMap<u16, u16> = if full {
@@ -242,27 +290,75 @@ pub fn spawn(
                         .collect()
                 };
 
-                // A delta with nothing in it still gets written: the timestamp
-                // is evidence that the device was answering and simply did not
-                // change, which is different from a gap in the log.
-                let line = encode(&stamp, &payload, full);
+                since_full = if full { 0 } else { since_full + 1 };
+                (encode(&stamp, &payload, full), true)
+            } else {
+                consecutive_failures += 1;
+                let reason = first_error.clone().unwrap_or_else(|| {
+                    if connected {
+                        "no blocks returned data".to_string()
+                    } else {
+                        "not connected".to_string()
+                    }
+                });
 
-                let write = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .and_then(|mut f| f.write_all(line.as_bytes()));
+                // Reopen the port after a run of failures. A wedged driver
+                // handle recovers from this; a mute device does not — which is
+                // itself the diagnostic, recorded in the note.
+                let note = if connected && consecutive_failures % REOPEN_AFTER == 0 {
+                    let saved = params.lock().ok().and_then(|p| p.clone());
+                    match saved {
+                        Some(p) => {
+                            let outcome = match crate::modbus::Rtu::open(&p.path, p.baud, p.slave) {
+                                Ok(fresh) => {
+                                    if let Ok(mut guard) = link.lock() {
+                                        *guard = Some(fresh);
+                                        format!("reopened {} after {} failures", p.path, consecutive_failures)
+                                    } else {
+                                        "reopen skipped: port lock poisoned".to_string()
+                                    }
+                                }
+                                Err(e) => format!("reopen of {} failed: {e}", p.path),
+                            };
+                            Some(outcome)
+                        }
+                        None => Some("reopen skipped: no saved connection parameters".to_string()),
+                    }
+                } else {
+                    None
+                };
 
-                match write {
-                    Ok(()) => {
-                        logger.records.fetch_add(1, Ordering::Relaxed);
+                (
+                    encode_failure(
+                        &stamp,
+                        failed_blocks,
+                        ALL_BLOCKS.len(),
+                        &reason,
+                        note.as_deref(),
+                    ),
+                    false,
+                )
+            };
+
+            let write = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut f| f.write_all(line.as_bytes()));
+
+            match write {
+                Ok(()) => {
+                    logger.records.fetch_add(1, Ordering::Relaxed);
+                    if succeeded {
+                        consecutive_failures = 0;
                         *logger.last_error.lock().unwrap() = None;
                         previous = values;
-                        since_full = if full { 0 } else { since_full + 1 };
+                    } else {
+                        logger.failures.fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(e) => {
-                        *logger.last_error.lock().unwrap() = Some(e.to_string());
-                    }
+                }
+                Err(e) => {
+                    *logger.last_error.lock().unwrap() = Some(e.to_string());
                 }
             }
 
@@ -288,6 +384,7 @@ pub fn status(logger: &Logger) -> LoggingStatus {
         running: logger.running.load(Ordering::Relaxed),
         path: dir.map(|p| p.display().to_string()),
         records: logger.records.load(Ordering::Relaxed),
+        failures: logger.failures.load(Ordering::Relaxed),
         bytes,
         files,
         last_error: logger.last_error.lock().unwrap().clone(),

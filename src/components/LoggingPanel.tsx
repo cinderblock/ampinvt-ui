@@ -137,6 +137,27 @@ export default function LoggingPanel({ connected }: Props) {
         </p>
       )}
 
+      {status && status.failures > 0 && (
+        <div className="banner critical" style={{ marginTop: 14, marginBottom: 0 }}>
+          <span className="icon" aria-hidden="true">
+            ✕
+          </span>
+          <div className="body">
+            <strong>
+              {status.failures.toLocaleString()} sweep
+              {status.failures === 1 ? '' : 's'} returned no data.
+            </strong>{' '}
+            The inverter stopped answering while the app kept polling. Each one is
+            recorded in the log with a timestamp and reason, and the port is reopened
+            after every third consecutive failure — a wedged driver handle recovers from
+            that, a mute inverter does not, which is itself the diagnostic.
+            <br />
+            Run <span className="mono">tools/outages.py</span> against the log directory to
+            see when they happened and what the readings were beforehand.
+          </div>
+        </div>
+      )}
+
       {(error || status?.last_error) && (
         <p className="desc err">{error ?? status?.last_error}</p>
       )}

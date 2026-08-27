@@ -48,6 +48,27 @@ def load_states(path):
         yield from _load_one(one)
 
 
+def load_failures(path):
+    """Yield (timestamp, record) for sweeps that produced no usable data.
+
+    These carry ``"ok": false`` and no ``regs``. They are the evidence that the
+    device went mute at a particular moment, as opposed to the app simply not
+    running — a distinction the log could not make before failures were
+    recorded.
+    """
+    for one in log_files(path):
+        with open(one, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or '"ok":false' not in line.replace(" ", ""):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                yield rec.get("t", ""), rec
+
+
 def _load_one(path):
     state = {}
     seen_full = False
@@ -60,6 +81,12 @@ def _load_one(path):
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                continue
+
+            # Failure records carry no register data. Skipping them here keeps
+            # the reconstructed state honest — a mute sweep must not be read as
+            # "every register held its previous value", which would invent data.
+            if "regs" not in rec:
                 continue
 
             regs = {int(k): v for k, v in rec.get("regs", {}).items()}

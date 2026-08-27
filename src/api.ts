@@ -79,6 +79,8 @@ export interface LoggingStatus {
   /** Directory holding the daily files, not a single file. */
   path: string | null;
   records: number;
+  /** Sweeps that produced no usable data — the device went mute. */
+  failures: number;
   /** Total across every daily file, not just today's. */
   bytes: number;
   files: number;

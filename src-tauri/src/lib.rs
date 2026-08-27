@@ -12,10 +12,22 @@ use tauri::{Manager, State};
 use logging::{Logger, LoggingStatus};
 use modbus::Rtu;
 
+/// What `connect` was called with, kept so the logger can reopen the port
+/// itself after a sustained failure without a human present to press Connect.
+#[derive(Clone)]
+pub struct ConnParams {
+    pub path: String,
+    pub baud: u32,
+    pub slave: u8,
+}
+
 /// Shared so the background logger thread can use the same port as the UI
 /// poller. One process, one open handle, no contention over the COM port.
 #[derive(Default)]
-pub struct Link(pub Arc<Mutex<Option<Rtu>>>);
+pub struct Link {
+    pub rtu: Arc<Mutex<Option<Rtu>>>,
+    pub params: Arc<Mutex<Option<ConnParams>>>,
+}
 
 #[derive(Serialize)]
 struct PortInfo {
@@ -107,10 +119,14 @@ async fn connect(
     baud: u32,
     slave: u8,
 ) -> Result<(), String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
+    let params = link.params.clone();
     off_thread(move || {
         let rtu = Rtu::open(&path, baud, slave)?;
         *port.lock().unwrap() = Some(rtu);
+        // Remembered so the logger can reopen the port on its own after a
+        // sustained failure, with nobody present to press Connect.
+        *params.lock().unwrap() = Some(ConnParams { path, baud, slave });
         Ok(())
     })
     .await
@@ -118,7 +134,7 @@ async fn connect(
 
 #[tauri::command]
 async fn disconnect(link: State<'_, Link>) -> Result<(), String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
     off_thread(move || {
         *port.lock().unwrap() = None;
         Ok(())
@@ -128,7 +144,7 @@ async fn disconnect(link: State<'_, Link>) -> Result<(), String> {
 
 #[tauri::command]
 async fn is_connected(link: State<'_, Link>) -> Result<bool, String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
     off_thread(move || Ok(port.lock().unwrap().is_some())).await
 }
 
@@ -141,7 +157,7 @@ async fn read_blocks(
     link: State<'_, Link>,
     blocks: Vec<BlockSpec>,
 ) -> Result<Vec<BlockResult>, String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
     off_thread(move || {
         let mut guard = port.lock().unwrap();
         let rtu = guard.as_mut().ok_or("not connected")?;
@@ -178,7 +194,7 @@ async fn write_register(
     value: u16,
     expect: u16,
 ) -> Result<WriteReport, String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
     off_thread(move || {
         let mut guard = port.lock().unwrap();
         let rtu = guard.as_mut().ok_or("not connected")?;
@@ -219,7 +235,7 @@ async fn write_register(
 /// or firmware can be re-surveyed without leaving the app.
 #[tauri::command]
 async fn discover_blocks(link: State<'_, Link>, stride: u16) -> Result<Vec<u16>, String> {
-    let port = link.0.clone();
+    let port = link.rtu.clone();
     off_thread(move || {
         let mut guard = port.lock().unwrap();
         let rtu = guard.as_mut().ok_or("not connected")?;
@@ -260,7 +276,8 @@ fn start_logging(
     logger.running.store(true, Ordering::Relaxed);
 
     logging::spawn(
-        link.0.clone(),
+        link.rtu.clone(),
+        link.params.clone(),
         logger.inner().clone(),
         dir,
         Duration::from_secs(interval_secs.clamp(2, 3600)),
