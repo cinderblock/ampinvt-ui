@@ -145,7 +145,13 @@ fn escape(s: &str) -> String {
 /// normal unless you know the exact expected total. Partial reads turned out to
 /// be the leading indicator of a link about to fail completely, so they need to
 /// be unmistakable in the log rather than reconstructable from it.
-fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool, failed: usize) -> String {
+fn encode(
+    stamp: &str,
+    regs: &BTreeMap<u16, u16>,
+    full: bool,
+    failed: usize,
+    kind: Option<&str>,
+) -> String {
     let mut line = String::with_capacity(regs.len() * 12 + 48);
     line.push_str("{\"t\":\"");
     line.push_str(stamp);
@@ -155,6 +161,12 @@ fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool, failed: usize) -> 
     }
     if failed > 0 {
         line.push_str(&format!(",\"failed\":{failed}"));
+        // "timeout" means the device never spoke — starvation. "crc" means it
+        // spoke and the bytes arrived damaged — corruption. Recording which is
+        // the difference between diagnosing the fault and guessing at it.
+        if let Some(k) = kind {
+            line.push_str(&format!(",\"kind\":\"{k}\""));
+        }
     }
     line.push_str(",\"regs\":{");
     for (i, (addr, value)) in regs.iter().enumerate() {
@@ -229,6 +241,7 @@ pub fn spawn(
             let mut connected = false;
             let mut failed_blocks = 0usize;
             let mut first_error: Option<String> = None;
+            let mut first_kind: Option<&str> = None;
 
             // Take the lock per block, not for the whole sweep.
             //
@@ -261,6 +274,7 @@ pub fn spawn(
                             Err(e) => {
                                 failed_blocks += 1;
                                 if first_error.is_none() {
+                                    first_kind = Some(e.kind());
                                     first_error = Some(format!("{:#06x}: {e}", addr));
                                 }
                             }
@@ -311,7 +325,7 @@ pub fn spawn(
                 if failed_blocks > 0 {
                     logger.partials.fetch_add(1, Ordering::Relaxed);
                 }
-                (encode(&stamp, &payload, full, failed_blocks), true)
+                (encode(&stamp, &payload, full, failed_blocks, first_kind), true)
             } else {
                 consecutive_failures += 1;
                 let reason = first_error.clone().unwrap_or_else(|| {
@@ -419,14 +433,14 @@ mod tests {
     fn full_records_are_marked_and_deltas_are_not() {
         let mut regs = BTreeMap::new();
         regs.insert(0x0500u16, 541u16);
-        assert!(encode("T", &regs, true, 0).contains("\"full\":true"));
-        assert!(!encode("T", &regs, false, 0).contains("full"));
+        assert!(encode("T", &regs, true, 0, None).contains("\"full\":true"));
+        assert!(!encode("T", &regs, false, 0, None).contains("full"));
     }
 
     #[test]
     fn encoding_uses_decimal_addresses() {
         let mut regs = BTreeMap::new();
         regs.insert(0x0500u16, 541u16);
-        assert!(encode("T", &regs, false, 0).contains("\"1280\":541"));
+        assert!(encode("T", &regs, false, 0, None).contains("\"1280\":541"));
     }
 }

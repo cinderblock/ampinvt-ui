@@ -38,6 +38,26 @@ pub enum ModbusError {
     Io(String),
 }
 
+impl ModbusError {
+    /// Short tag for aggregating failures in the log.
+    ///
+    /// The distinction matters more than it looks. A **timeout** means the
+    /// request was never answered — the device did not speak, which is what
+    /// MCU starvation under load looks like. A **CRC mismatch** means it did
+    /// speak and the bytes arrived damaged, which is line corruption. Those
+    /// have different causes and different fixes, and counting them separately
+    /// is the cheapest way to tell which one is happening.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ModbusError::Exception(_) => "exception",
+            ModbusError::Timeout => "timeout",
+            ModbusError::Malformed(why) if why.contains("CRC") => "crc",
+            ModbusError::Malformed(_) => "malformed",
+            ModbusError::Io(_) => "io",
+        }
+    }
+}
+
 impl std::fmt::Display for ModbusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -72,6 +92,15 @@ impl From<ModbusError> for String {
 /// gives comfortable margin over the observed 30ms threshold and matches what
 /// the Python tooling used, which ran for hours without a single lost frame.
 const INTER_FRAME: Duration = Duration::from_millis(50);
+
+/// Extra quiet before retrying a failed exchange, on top of INTER_FRAME.
+///
+/// After a timeout the device may still be mid-reply — we gave up, it did not.
+/// Those bytes are landing in the driver buffer, and although the buffer is
+/// cleared before each request, a reply still arriving *during* that clear
+/// would be read as the start of the next frame. Waiting longer than any
+/// plausible late reply removes the race.
+const RECOVERY_SILENCE: Duration = Duration::from_millis(250);
 
 pub struct Rtu {
     port: Box<dyn SerialPort>,
@@ -220,11 +249,21 @@ impl Rtu {
         attempts: u8,
     ) -> Result<Vec<u16>, ModbusError> {
         let mut last = ModbusError::Timeout;
-        for _ in 0..attempts.max(1) {
+        for attempt in 0..attempts.max(1) {
             match self.read_holding(addr, count) {
                 Ok(values) => return Ok(values),
                 Err(ModbusError::Exception(code)) => return Err(ModbusError::Exception(code)),
-                Err(e) => last = e,
+                Err(e) => {
+                    last = e;
+                    // Give the line longer than the usual gap before retrying.
+                    // A reply that arrived after we gave up is still on its way
+                    // into the buffer; retrying immediately would read its tail
+                    // as the head of the next frame. Silence is how RTU
+                    // resynchronises, so the fix is simply more of it.
+                    if attempt + 1 < attempts.max(1) {
+                        std::thread::sleep(RECOVERY_SILENCE);
+                    }
+                }
             }
         }
         Err(last)
