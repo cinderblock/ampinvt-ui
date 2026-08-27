@@ -520,14 +520,33 @@ export function describeBatteryType(raw: number | undefined) {
   return { ...option, lithium: isLithiumBatteryType(raw) };
 }
 
-/** Blocks the poller reads each cycle. Everything above must fall inside one. */
-export const POLL_BLOCKS: { addr: number; count: number }[] = [
-  { addr: 0x0400, count: 32 }, // identity / firmware build string
+/**
+ * The bus needs a 50ms gap between frames (see INTER_FRAME in modbus.rs), so a
+ * block read costs ~120ms of bus time. Polling all five blocks every second
+ * would spend 60% of the bus on data that barely changes, and starve the
+ * background logger.
+ *
+ * So the poll is split by how fast each block actually moves.
+ */
+
+/** Live telemetry — worth reading every second. ~240ms of bus time. */
+export const FAST_BLOCKS: { addr: number; count: number }[] = [
   { addr: 0x0500, count: 32 }, // live telemetry
   { addr: 0x0600, count: 32 }, // counters
+];
+
+/**
+ * Settings and identity. These only change when something writes them, so a
+ * slow cadence is plenty — and a write triggers an immediate re-read anyway.
+ */
+export const SLOW_BLOCKS: { addr: number; count: number }[] = [
+  { addr: 0x0400, count: 32 }, // identity / firmware build string
   { addr: 0x1000, count: 32 }, // settings
   { addr: 0x1100, count: 32 }, // settings (AC / PV currents)
 ];
+
+/** Everything the UI decodes, for the first read after connecting. */
+export const POLL_BLOCKS = [...FAST_BLOCKS, ...SLOW_BLOCKS];
 
 /** All blocks known to exist, for the raw explorer view. */
 export const KNOWN_BLOCKS = [

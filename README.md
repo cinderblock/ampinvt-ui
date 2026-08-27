@@ -35,7 +35,32 @@ Modbus RTU. Adding a second inverter should be a new map, not a rewrite.
 | Slave address | 1 |
 | Read | function `0x03` |
 | Write | function `0x06` |
-| Poll rate | 1 Hz — the bus does not like being pushed harder |
+| **Inter-frame gap** | **50 ms — mandatory, see below** |
+| Poll rate | live blocks 1 Hz, settings 15 s |
+
+### The inter-frame gap is not optional
+
+Modbus RTU only requires 3.5 character times between frames — about 3.65 ms at
+9600 8N1. **This inverter needs roughly ten times that.** Measured on a real unit,
+reading `0x1000` thirty times per step:
+
+| gap | result |
+|---|---|
+| 10 ms | 15/30 |
+| 15 ms | 19/30 |
+| 20 ms | 21/30 |
+| 25 ms | 29/30 |
+| **30 ms** | **30/30** |
+| 60 ms | 30/30 |
+
+Below the threshold it answers roughly **every other request** — a burst with no gap
+scores exactly 13/25, a perfect alternating pattern. It is not mis-framing; it is slow
+to re-arm its receiver.
+
+The app enforces 50 ms, measured from the end of the previous exchange, on every path
+including failures. A sustained 90-second run at the app's real duty cycle loses zero
+frames. Removing or shrinking this will produce intermittent, confusing timeouts that
+look like a hardware fault.
 
 ## Installing
 

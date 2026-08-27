@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import './styles.css';
-import { POLL_BLOCKS } from './registers';
+import { FAST_BLOCKS, POLL_BLOCKS, SLOW_BLOCKS } from './registers';
 import { readBlocks, startLogging, toRegisterMap, type BlockResult } from './api';
 import LoggingPanel, { loadLogEnabled, loadLogInterval } from './components/LoggingPanel';
 import { SafetyProvider, useSafety } from './safety';
@@ -22,6 +22,8 @@ type Tab = 'dashboard' | 'settings' | 'raw' | 'updates';
 const POLL_MS = 1000;
 /** Ceiling for the failure back-off. */
 const MAX_POLL_MS = 15000;
+/** Settings and identity barely move; a write re-reads them immediately anyway. */
+const SLOW_POLL_MS = 15000;
 
 function Shell() {
   const [connected, setConnected] = useState(false);
@@ -44,13 +46,23 @@ function Shell() {
   const failStreak = useRef(0);
   const [pollMs, setPollMs] = useState(POLL_MS);
 
-  const poll = useCallback(async () => {
+  const poll = useCallback(async (which: { addr: number; count: number }[]) => {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
-      const results = await readBlocks(POLL_BLOCKS);
-      setBlocks(results);
-      setRegisters(toRegisterMap(results));
+      const results = await readBlocks(which);
+      // Merge rather than replace: a fast poll must not blank the settings
+      // that only the slow poll refreshes.
+      setBlocks((prev) => {
+        const merged = new Map(prev.map((b) => [b.addr, b]));
+        results.forEach((b) => merged.set(b.addr, b));
+        return [...merged.values()].sort((a, b) => a.addr - b.addr);
+      });
+      setRegisters((prev) => {
+        const merged = new Map(prev);
+        for (const [addr, value] of toRegisterMap(results)) merged.set(addr, value);
+        return merged;
+      });
       setLastRead(new Date());
       setError(null);
 
@@ -75,9 +87,14 @@ function Shell() {
 
   useEffect(() => {
     if (!connected) return undefined;
-    void poll();
-    const id = setInterval(() => void poll(), pollMs);
-    return () => clearInterval(id);
+    // First read covers everything so settings populate immediately.
+    void poll(POLL_BLOCKS);
+    const fast = setInterval(() => void poll(FAST_BLOCKS), pollMs);
+    const slow = setInterval(() => void poll(SLOW_BLOCKS), SLOW_POLL_MS);
+    return () => {
+      clearInterval(fast);
+      clearInterval(slow);
+    };
   }, [connected, poll, pollMs]);
 
   // Logging is on by default: the data is only capturable while the event is
@@ -192,7 +209,13 @@ function Shell() {
 
       {tab === 'dashboard' && <Dashboard registers={registers} connected={connected} />}
       {tab === 'settings' && (
-        <Settings registers={registers} connected={connected} onWritten={() => void poll()} />
+        <Settings
+          registers={registers}
+          connected={connected}
+          // A write lands in the slow blocks, so re-read those rather than
+          // waiting up to 15s for the next slow tick.
+          onWritten={() => void poll(SLOW_BLOCKS)}
+        />
       )}
       {tab === 'raw' && (
         <>

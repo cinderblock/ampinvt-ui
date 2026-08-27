@@ -6,7 +6,7 @@
 //! what would make a second device a data change rather than a rewrite.
 
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serialport::SerialPort;
 
@@ -58,9 +58,27 @@ impl From<ModbusError> for String {
     }
 }
 
+/// Minimum silence between the end of one reply and the start of the next
+/// request.
+///
+/// Modbus RTU only requires 3.5 character times — about 3.65ms at 9600 8N1 —
+/// but this inverter needs far longer to re-arm its receiver. Measured on the
+/// real unit with `gap_threshold.py`, reading 0x1000 thirty times per step:
+///
+///   10ms 15/30   15ms 19/30   20ms 21/30   25ms 29/30   30ms 30/30   60ms 30/30
+///
+/// Below the threshold it answers roughly every *other* request — a burst at
+/// 0ms gap scores exactly 13/25, which is a perfect alternating pattern. 50ms
+/// gives comfortable margin over the observed 30ms threshold and matches what
+/// the Python tooling used, which ran for hours without a single lost frame.
+const INTER_FRAME: Duration = Duration::from_millis(50);
+
 pub struct Rtu {
     port: Box<dyn SerialPort>,
     slave: u8,
+    /// When the last transaction finished, so the gap is enforced without
+    /// penalising a caller that was already slow.
+    last_txn: Option<Instant>,
 }
 
 /// Windows needs the `\\.\` prefix for COM10 and above; COM1-9 work bare.
@@ -99,10 +117,33 @@ impl Rtu {
         // frame goes out, or the opening request can be swallowed.
         std::thread::sleep(Duration::from_millis(50));
 
-        Ok(Rtu { port, slave })
+        Ok(Rtu {
+            port,
+            slave,
+            last_txn: None,
+        })
     }
 
     fn transact(&mut self, request: &[u8], expect_fc: u8) -> Result<Vec<u8>, ModbusError> {
+        // Enforce the inter-frame gap. Without it this device answers only
+        // every other request; see INTER_FRAME for the measurements.
+        if let Some(last) = self.last_txn {
+            let since = last.elapsed();
+            if since < INTER_FRAME {
+                std::thread::sleep(INTER_FRAME - since);
+            }
+        }
+
+        let result = self.transact_inner(request, expect_fc);
+
+        // Stamp on every path, including failures. A timed-out or malformed
+        // exchange still leaves the device needing its recovery window — if
+        // anything it needs it more, so retrying instantly is the worst move.
+        self.last_txn = Some(Instant::now());
+        result
+    }
+
+    fn transact_inner(&mut self, request: &[u8], expect_fc: u8) -> Result<Vec<u8>, ModbusError> {
         self.port
             .clear(serialport::ClearBuffer::Input)
             .map_err(|e| ModbusError::Io(e.to_string()))?;
