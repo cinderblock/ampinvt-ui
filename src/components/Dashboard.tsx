@@ -1,9 +1,10 @@
 import {
+  BATTERY_CURRENT,
   BUILD_STRING_RANGE,
   REGISTERS,
   decodeAscii,
-  describeBatteryCurrent,
   describeBatteryType,
+  describeFlow,
   formatValue,
   type RegisterDef,
 } from '../registers';
@@ -15,8 +16,9 @@ interface Props {
 
 function Tile({ def, registers }: { def: RegisterDef; registers: Map<number, number> }) {
   const raw = registers.get(def.addr);
+  const flow = describeFlow(def, raw);
   return (
-    <div className="tile">
+    <div className={flow ? `tile flow-${flow.direction}` : 'tile'}>
       <div className="label">
         {def.label}
         {def.confidence !== 'high' && (
@@ -24,9 +26,15 @@ function Tile({ def, registers }: { def: RegisterDef; registers: Map<number, num
         )}
       </div>
       <div className="value">
-        {formatValue(def, raw)}
+        {flow ? flow.magnitude.toFixed(def.decimals) : formatValue(def, raw)}
         {def.unit && <span className="unit">{def.unit}</span>}
       </div>
+      {flow && (
+        <div className="direction">
+          <span aria-hidden="true">{flow.arrow}</span>
+          {flow.label}
+        </div>
+      )}
       <div className="hint">
         <span className="mono">0x{def.addr.toString(16).padStart(4, '0')}</span>
         {raw !== undefined && <> · raw {raw}</>}
@@ -44,7 +52,7 @@ export default function Dashboard({ registers, connected }: Props) {
   const battery = describeBatteryType(registers.get(0x1002));
   const boost = registers.get(0x1007);
   const float = registers.get(0x1008);
-  const current = describeBatteryCurrent(registers.get(0x0501));
+  const current = describeFlow(BATTERY_CURRENT, registers.get(BATTERY_CURRENT.addr));
   const mains = registers.get(0x061f);
 
   const idle = connected && current?.direction === 'idle' && !mains;
@@ -77,25 +85,8 @@ export default function Dashboard({ registers, connected }: Props) {
             !
           </span>
           <div className="body">
-            <strong>Inverter appears idle.</strong> Almost every telemetry register reads
-            zero when the unit is neither charging nor inverting, so most of this page will
-            stay blank until there is PV input or a load. That is expected, not a fault.
-          </div>
-        </div>
-      )}
-
-      {current && (
-        <div className="tiles">
-          <div className="tile">
-            <div className="label">Battery</div>
-            <div className="value">
-              {current.magnitude.toFixed(1)}
-              <span className="unit">A</span>
-            </div>
-            <div className="hint">
-              {current.direction}
-              {mains ? ' · mains present' : ' · off-grid'}
-            </div>
+            <strong>Inverter appears idle.</strong> Telemetry reads zero until there is PV
+            input or a load — expected, not a fault.
           </div>
         </div>
       )}
@@ -159,24 +150,11 @@ export default function Dashboard({ registers, connected }: Props) {
           <strong>output power</strong>.
         </p>
         <p className="desc">
-          <span className="mono">0x0502</span> is likely the inverter's{' '}
-          <strong>own</strong> state-of-charge estimate. With no BMS link it can only infer
-          SOC from voltage, so it will disagree with the battery pack, which counts
-          coulombs — the two are different quantities, not a contradiction. It stays within
-          45–100, caps at exactly 100, and correlates 0.47 with battery voltage: too loose
-          for a raw voltage lookup, about right for a smoothed one.
-        </p>
-        <p className="desc">
-          <span className="mono">0x0510</span> is the strongest unidentified signal —
-          correlating 0.84 with battery voltage across 517 samples.{' '}
-          <span className="mono">0x0509</span> matched it exactly across one charge step but
-          diverges over longer windows, so they are not the same quantity.
-        </p>
-        <p className="desc">
-          The way to name them is a step change in <strong>load</strong> rather than
-          charge: start logging in the Raw registers tab, switch something substantial on,
-          and diff across the boundary. Anything tracking load power has to move sharply
-          there; anything that does not, is not it.
+          To name <span className="mono">0x0509</span> and{' '}
+          <span className="mono">0x0510</span>, step the <strong>load</strong> rather than
+          the charge: start logging in the Raw registers tab, switch something substantial
+          on, and diff across the boundary. Anything tracking load power has to move
+          sharply there.
         </p>
       </section>
     </>

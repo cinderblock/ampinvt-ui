@@ -34,6 +34,16 @@ export type Kind = 'live' | 'setting' | 'info';
  */
 export type Tier = 'normal' | 'setup';
 
+/**
+ * Direction names for a signed register whose sign is a direction of flow.
+ * Negative is *into* the thing being measured, positive is out of it.
+ */
+export interface FlowLabels {
+  in: string;
+  out: string;
+  idle: string;
+}
+
 export interface EnumOption {
   value: number;
   code: string;
@@ -58,6 +68,12 @@ export interface RegisterDef {
    * displays a nonsensical 6533.7 A.
    */
   signed?: boolean;
+  /**
+   * Present when the sign means a direction rather than a smaller number. The
+   * UI then shows the magnitude and names the direction in colour, so a minus
+   * sign never reaches the screen.
+   */
+  flow?: FlowLabels;
   writable?: boolean;
   tier?: Tier;
   /** Present for enumerated registers — renders a picker instead of a number. */
@@ -127,6 +143,11 @@ export const REGISTERS: RegisterDef[] = [
     unit: 'V',
     confidence: 'high',
   },
+  /*
+   * Negative is current INTO the battery. Verified against the pack's own
+   * readout: raw 65341 (-19.5 A) while the pack reported 19.78 A charging, and
+   * 65524 (-1.2 A) a minute later when the pack read 0.53 A.
+   */
   {
     key: 'batteryCurrent',
     addr: 0x0501,
@@ -136,11 +157,8 @@ export const REGISTERS: RegisterDef[] = [
     decimals: 1,
     unit: 'A',
     signed: true,
+    flow: { in: 'Charging', out: 'Discharging', idle: 'Idle' },
     confidence: 'high',
-    note:
-      'Signed: negative means charging. Verified against the battery pack readout — ' +
-      'raw 65341 (-19.5 A) while the pack reported 19.78 A charging, and 65524 ' +
-      '(-1.2 A) one minute later when the pack read 0.53 A.',
   },
   {
     key: 'pvVoltage',
@@ -151,9 +169,8 @@ export const REGISTERS: RegisterDef[] = [
     decimals: 1,
     unit: 'V',
     confidence: 'high',
-    note:
-      'Rises toward open-circuit when charge demand falls — 75.7 V while bulk ' +
-      'charging, 115.7 V a minute later with the pack near full.',
+    // 75.7 V while bulk charging, 115.7 V a minute later with the pack near full.
+    note: 'Rises toward open-circuit as charge demand falls.',
   },
   {
     key: 'acInputVoltage',
@@ -164,7 +181,8 @@ export const REGISTERS: RegisterDef[] = [
     decimals: 1,
     unit: 'V',
     confidence: 'high',
-    note: 'Reads 0 with no mains present. Went 107.6 V -> 0 the moment the wall charger was unplugged.',
+    // Went 107.6 V -> 0 the moment the wall charger was unplugged.
+    note: 'Reads 0 with no mains present.',
   },
   {
     key: 'estimatedSoc',
@@ -175,12 +193,14 @@ export const REGISTERS: RegisterDef[] = [
     decimals: 0,
     unit: '%',
     confidence: 'low',
-    note:
-      "Probably the inverter's OWN estimate, not the pack's. There is no BMS link, so " +
-      'it can only infer SOC from voltage — and it will disagree with the pack, which ' +
-      'counts coulombs. Observed 45–100, capping at exactly 100, and correlating 0.47 ' +
-      'with battery voltage over 517 samples: too loose for a raw voltage lookup, about ' +
-      'right for a smoothed or load-compensated one. Treat as indicative only.',
+    /*
+     * With no BMS link the inverter can only infer SOC from voltage, so it will
+     * disagree with the pack, which counts coulombs — different quantities, not
+     * a contradiction. Observed 45–100, capping at exactly 100, correlating 0.47
+     * with battery voltage over 517 samples: too loose for a raw voltage lookup,
+     * about right for a smoothed or load-compensated one.
+     */
+    note: "The inverter's own guess from voltage, not the pack's. Indicative only.",
   },
   {
     key: 'live0509',
@@ -190,9 +210,8 @@ export const REGISTERS: RegisterDef[] = [
     scale: 1,
     decimals: 0,
     confidence: 'low',
-    note:
-      'Matched 0x0510 exactly across the charge step, but the two diverge over a longer ' +
-      'window, so they are not the same quantity. Range 0–184.',
+    // Matched 0x0510 exactly across one charge step; the two diverge over hours.
+    note: 'Range 0–184. Not the same quantity as 0x0510.',
   },
   {
     key: 'live0510',
@@ -202,9 +221,9 @@ export const REGISTERS: RegisterDef[] = [
     scale: 1,
     decimals: 0,
     confidence: 'low',
-    note:
-      'Strongest unidentified signal: correlates 0.84 with battery voltage over 517 ' +
-      'samples, range 0–1504. A load-side step change is what will name it.',
+    // Correlates 0.84 with battery voltage over 517 samples — the strongest
+    // unidentified signal. A load-side step change is what will name it.
+    note: 'Range 0–1504. Tracks battery voltage loosely.',
   },
   {
     key: 'runtimeCounter',
@@ -651,17 +670,25 @@ export function formatValue(def: RegisterDef, raw: number | undefined): string {
   return toDisplay(def, raw).toFixed(def.decimals);
 }
 
+/** Below this magnitude (display units) a flow reads as idle, not a direction. */
+const FLOW_DEADBAND = 0.05;
+
 /**
  * Battery current is signed with negative meaning charging, which is the
- * opposite of how anyone reads a dashboard. Show the magnitude and say which
- * way it is going in words.
+ * opposite of how anyone reads a dashboard. Rather than print a minus sign,
+ * split it into a magnitude and a named direction the UI can colour.
  */
-export function describeBatteryCurrent(raw: number | undefined) {
-  if (raw === undefined) return undefined;
-  const amps = asSigned(raw) / 10;
+export function describeFlow(def: RegisterDef, raw: number | undefined) {
+  if (!def.flow || raw === undefined) return undefined;
+  const value = toDisplay(def, raw);
+  const direction = value < -FLOW_DEADBAND ? 'in' : value > FLOW_DEADBAND ? 'out' : 'idle';
   return {
-    amps,
-    magnitude: Math.abs(amps),
-    direction: amps < -0.05 ? 'charging' : amps > 0.05 ? 'discharging' : 'idle',
+    magnitude: Math.abs(value),
+    direction,
+    label: def.flow[direction],
+    arrow: direction === 'in' ? '↓' : direction === 'out' ? '↑' : '·',
   } as const;
 }
+
+/** The one register the dashboard reasons about beyond rendering its tile. */
+export const BATTERY_CURRENT = REGISTERS.find((r) => r.key === 'batteryCurrent')!;

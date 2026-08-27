@@ -24,6 +24,14 @@
 
   --accent: #2a78d6;
 
+  /*
+   * Direction ink for flow readouts. Separate from the fixed status palette
+   * above because these are used as small bold text and so have to clear
+   * 4.5:1 against the surface, which means they get themed.
+   */
+  --flow-in: #0b7a0b;
+  --flow-out: #2166c0;
+
   --radius: 10px;
   --gap: 12px;
 }
@@ -40,6 +48,8 @@
     --baseline: #383835;
     --border: rgba(255, 255, 255, 0.1);
     --accent: #3987e5;
+    --flow-in: #4cd44c;
+    --flow-out: #6db3ff;
   }
 }
 
@@ -54,6 +64,8 @@
   --baseline: #383835;
   --border: rgba(255, 255, 255, 0.1);
   --accent: #3987e5;
+  --flow-in: #4cd44c;
+  --flow-out: #6db3ff;
 }
 
 * {
@@ -236,6 +248,43 @@ nav.tabs button[aria-selected='true'] {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 5px;
+}
+
+/*
+ * A signed reading is shown as a magnitude plus a named direction — a minus
+ * sign in front of an ammeter reading is a puzzle, not information. Colour and
+ * the edge bar carry the same distinction the word does, never it alone.
+ */
+.tile .direction {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.tile.flow-in,
+.tile.flow-out {
+  border-left-width: 3px;
+  padding-left: 12px;
+}
+
+.tile.flow-in {
+  border-left-color: var(--flow-in);
+}
+
+.tile.flow-in .direction {
+  color: var(--flow-in);
+}
+
+.tile.flow-out {
+  border-left-color: var(--flow-out);
+}
+
+.tile.flow-out .direction {
+  color: var(--flow-out);
 }
 
 /* --------------------------------------------------------------- section -- */
