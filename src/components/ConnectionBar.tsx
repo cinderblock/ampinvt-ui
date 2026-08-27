@@ -14,6 +14,9 @@ const SLAVE = 1;
 const AUTO_KEY = 'ampinvt-ui.auto-connect';
 const PORT_KEY = 'ampinvt-ui.last-port';
 
+/** How often to re-attempt auto-connect while it has never succeeded. */
+const AUTO_RETRY_MS = 15000;
+
 export function loadAutoConnect(): boolean {
   // Default on: the common case is a machine left running to log, where nobody
   // is present to press Connect after a restart.
@@ -47,8 +50,19 @@ export default function ConnectionBar({ connected, onConnectedChange, lastRead }
   const [error, setError] = useState<string | null>(null);
   const [autoConnect, setAutoConnect] = useState(loadAutoConnect);
 
-  /** Auto-connect is a startup action, not a policy — only ever fires once. */
-  const autoTried = useRef(false);
+  /**
+   * Auto-connect keeps trying until it succeeds.
+   *
+   * It used to fire exactly once at launch. If that attempt failed — most
+   * easily because something else briefly held the port — the app sat there
+   * running, apparently fine, connected to nothing and logging nothing, with no
+   * retry ever. Observed in the field: launched while another process held
+   * COM3, then idled for an hour.
+   *
+   * An explicit Disconnect still stops it; this only pursues a connection that
+   * was never established, not one the user deliberately ended.
+   */
+  const autoGaveUp = useRef(false);
 
   const refresh = async (): Promise<PortInfo[]> => {
     try {
@@ -79,18 +93,30 @@ export default function ConnectionBar({ connected, onConnectedChange, lastRead }
   };
 
   useEffect(() => {
-    void (async () => {
+    if (connected || autoGaveUp.current || !loadAutoConnect()) return undefined;
+
+    let cancelled = false;
+    const attempt = async () => {
+      if (cancelled || autoGaveUp.current) return;
       const found = await refresh();
-      if (autoTried.current || !loadAutoConnect() || connected) return;
-      autoTried.current = true;
       const target = choosePort(found);
-      if (target) await open(target.path);
-    })();
+      if (target && !cancelled) await open(target.path);
+    };
+
+    void attempt();
+    // Keep trying. The port being briefly unavailable at launch must not leave
+    // the app permanently idle with nobody there to notice.
+    const id = setInterval(() => void attempt(), AUTO_RETRY_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [connected]);
 
   const toggle = async () => {
     if (!connected) {
+      autoGaveUp.current = false;
       await open(selected);
       return;
     }
@@ -98,6 +124,9 @@ export default function ConnectionBar({ connected, onConnectedChange, lastRead }
     setError(null);
     try {
       await disconnect();
+      // A deliberate Disconnect must stick. Without this the retry loop would
+      // immediately reconnect and the button would appear not to work.
+      autoGaveUp.current = true;
       onConnectedChange(false);
     } catch (err) {
       setError(String(err));
