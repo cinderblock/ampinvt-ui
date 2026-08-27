@@ -17,15 +17,19 @@ Usage:
     python analyze_log.py log.jsonl --since 2026-08-26T20:00:00Z
 """
 import argparse
-import json
 import math
 import sys
+
+from logreader import load_states
 
 # Registers whose meaning is already established, so the report can say
 # "moves with battery voltage" rather than "moves with 0x0500".
 KNOWN = {
     0x0500: "battery voltage (/10 V)",
-    0x0501: "current? (/10 A)",
+    0x0501: "battery current, SIGNED, -ve = charging (/10 A)",
+    0x0502: "estimated SOC, inverter's own guess (%)",
+    0x0507: "PV voltage (/10 V)",
+    0x061F: "AC input voltage, 0 = no mains (/10 V)",
     0x1002: "battery type",
     0x1003: "max charge current (/10 A)",
     0x1006: "constant-charge V (x0.4)",
@@ -37,20 +41,10 @@ KNOWN = {
 
 
 def load(path, since=None):
-    rows = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if since and rec.get("t", "") < since:
-                continue
-            rows.append((rec["t"], {int(k): v for k, v in rec["regs"].items()}))
-    return rows
+    # Goes through logreader so delta records are reconstructed into full
+    # state. Filtering by --since happens after reconstruction, so the deltas
+    # before the cutoff still contribute the state they established.
+    return [(t, regs) for t, regs in load_states(path) if not since or t >= since]
 
 
 def pearson(xs, ys):

@@ -78,6 +78,8 @@ export interface LoggingStatus {
   running: boolean;
   path: string | null;
   records: number;
+  /** Current size of the log file on disk. */
+  bytes: number;
   last_error: string | null;
 }
 

@@ -18,6 +18,23 @@ export function loadLogInterval(): number {
   return Number.isFinite(raw) && raw >= 2 ? raw : DEFAULT_INTERVAL;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * Projected daily growth from what has actually been written so far, rather
+ * than from a nominal record size — deltas make the real figure depend
+ * entirely on how much the inverter is moving.
+ */
+function perDay(bytes: number, records: number, intervalSecs: number): number {
+  const perRecord = bytes / records;
+  return perRecord * (86400 / Math.max(1, intervalSecs));
+}
+
 interface Props {
   connected: boolean;
 }
@@ -86,7 +103,15 @@ export default function LoggingPanel({ connected }: Props) {
           />
           seconds
         </label>
-        {status && <span className="subtitle">{status.records.toLocaleString()} records</span>}
+        {status && (
+          <span className="subtitle">
+            {status.records.toLocaleString()} records
+            {status.bytes > 0 && <> · {formatBytes(status.bytes)}</>}
+            {status.bytes > 0 && status.records > 20 && (
+              <> · ~{formatBytes(perDay(status.bytes, status.records, interval))}/day</>
+            )}
+          </span>
+        )}
       </div>
 
       {status?.path && (
@@ -109,11 +134,15 @@ export default function LoggingPanel({ connected }: Props) {
       )}
 
       <p className="desc" style={{ marginTop: 12 }}>
-        One record per sweep:{' '}
-        <span className="mono">{'{"t":"2026-08-26T21:45:00Z","regs":{"1280":518,…}}'}</span>
+        Delta-encoded. A record marked <span className="mono">"full":true</span> carries
+        every register; the ones after it carry only what changed, with a fresh full
+        snapshot each hour so the file stays readable from its own start. Around 343 of the
+        384 registers never move, so this is far smaller than it sounds — full dumps cost
+        ~3.7&nbsp;kB each, roughly 32&nbsp;MB/day at a 10&nbsp;second interval.
         <br />
-        Timestamps are UTC ISO-8601 so they can be re-bucketed losslessly; keys are decimal
-        register addresses.
+        Rotates at 32&nbsp;MB keeping one previous generation
+        (<span className="mono">.jsonl.1</span>). Timestamps are UTC ISO-8601 so they can be
+        re-bucketed losslessly; keys are decimal register addresses.
       </p>
     </section>
   );

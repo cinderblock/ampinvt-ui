@@ -10,7 +10,8 @@ Usage:
     python step_diff.py LOG --before 2026-08-27T00:51 --after 2026-08-27T00:52
 """
 import argparse
-import json
+
+from logreader import load_rows
 
 
 def signed(v):
@@ -18,18 +19,9 @@ def signed(v):
 
 
 def load(path):
-    rows = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            rows.append((rec["t"], {int(k): v for k, v in rec["regs"].items()}))
-    return rows
+    # Goes through logreader so delta records are reconstructed. Reading them
+    # raw would make every unchanged register look absent.
+    return load_rows(path)
 
 
 def nearest(rows, prefix):
