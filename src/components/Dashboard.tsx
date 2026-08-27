@@ -144,17 +144,15 @@ export default function Dashboard({ registers, connected }: Props) {
       <section>
         <h2>What is not here yet</h2>
         <p className="desc">
-          Battery voltage and current, PV voltage and AC input voltage are all identified,
-          verified against the battery pack's own readout across a known step change.
-          Still missing: <strong>PV current</strong>, <strong>load power</strong> and{' '}
-          <strong>output power</strong>.
+          Battery voltage and current, PV voltage, AC input voltage, PV input power and
+          total input power are all identified against real operating data. Still missing:{' '}
+          <strong>load power</strong> and <strong>output power</strong>.
         </p>
         <p className="desc">
-          To name <span className="mono">0x0509</span> and{' '}
-          <span className="mono">0x0510</span>, step the <strong>load</strong> rather than
-          the charge: start logging in the Raw registers tab, switch something substantial
-          on, and diff across the boundary. Anything tracking load power has to move
-          sharply there.
+          Those two need a step change in <strong>load</strong> rather than charge — every
+          step so far has been charge-side, which is exactly why only charge-side registers
+          have names. Start logging, switch something substantial on, and diff across the
+          boundary with <span className="mono">tools/step_diff.py</span>.
         </p>
       </section>
     </>

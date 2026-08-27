@@ -203,27 +203,42 @@ export const REGISTERS: RegisterDef[] = [
     note: "The inverter's own guess from voltage, not the pack's. Indicative only.",
   },
   {
-    key: 'live0509',
+    key: 'pvPower',
     addr: 0x0509,
-    label: 'Unidentified (0x0509)',
+    label: 'PV input power',
     kind: 'live',
     scale: 1,
     decimals: 0,
-    confidence: 'low',
-    // Matched 0x0510 exactly across one charge step; the two diverge over hours.
-    note: 'Range 0–184. Not the same quantity as 0x0510.',
+    unit: 'W',
+    confidence: 'medium',
+    /*
+     * Reads 0 whenever there is no sun even while charging hard from mains, and
+     * equals 0x0510 exactly when PV is the only source. That pair of regimes is
+     * what separates it from total input power.
+     */
+    note: 'Zero at night even while mains-charging; equals total input when PV is the only source.',
   },
   {
-    key: 'live0510',
+    key: 'inputPower',
     addr: 0x0510,
-    label: 'Unidentified (0x0510)',
+    label: 'Total input power',
     kind: 'live',
     scale: 1,
     decimals: 0,
-    confidence: 'low',
-    // Correlates 0.84 with battery voltage over 517 samples — the strongest
-    // unidentified signal. A load-side step change is what will name it.
-    note: 'Range 0–1504. Tracks battery voltage loosely.',
+    unit: 'W',
+    confidence: 'high',
+    /*
+     * Correlates -0.99 with battery current over 1386 records (negative because
+     * charging current is negative). Fitting against battery power across both
+     * operating regimes — 190 W on solar and 1086 W on mains — gives
+     *
+     *     0x0510 ~= 1.168 * P_battery + 36
+     *
+     * i.e. 86% conversion efficiency and ~36 W standby. That the residual is a
+     * sensible physical constant rather than an arbitrary offset is most of the
+     * argument that the unit really is watts.
+     */
+    note: 'PV and AC combined. Roughly battery power / 0.86 plus ~36 W standby.',
   },
   {
     key: 'runtimeCounter',
