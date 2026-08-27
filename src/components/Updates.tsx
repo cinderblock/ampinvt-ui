@@ -85,12 +85,20 @@ export default function Updates({
           </p>
         )}
 
-        {version && (
-          <p className="desc" style={{ marginTop: 10 }}>
-            Installed <span className="mono">{currentVersion}</span> → available{' '}
-            <span className="mono">{version}</span>
-          </p>
-        )}
+        {/*
+          Show the installed version unconditionally. Previously it only
+          appeared when an update was pending, which meant the one moment it
+          could not be checked was straight after an install.
+        */}
+        <p className="desc" style={{ marginTop: 10 }}>
+          Installed <span className="mono">{currentVersion ?? 'unknown'}</span>
+          {version && (
+            <>
+              {' → available '}
+              <span className="mono">{version}</span>
+            </>
+          )}
+        </p>
 
         {notes && notes.trim() && (
           <div className="notes-panel">

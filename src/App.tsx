@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 
 import './styles.css';
 import { FAST_BLOCKS, POLL_BLOCKS, SLOW_BLOCKS } from './registers';
@@ -47,6 +48,18 @@ function Shell() {
   const [recovery, setRecovery] = useState<string | null>(null);
   const [lastRead, setLastRead] = useState<Date | null>(null);
   const [prefs, setPrefs] = useState<UpdatePrefs>(() => loadPrefs());
+
+  /**
+   * Read from the running binary rather than baked in at build time, so it is
+   * the version actually executing — the whole point is to answer "did the
+   * update land?" without having to trust that it did.
+   */
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    void getVersion()
+      .then(setAppVersion)
+      .catch(() => undefined);
+  }, []);
 
   const { interruptUnsafe } = useSafety();
   const updater = useUpdater({ prefs, interruptUnsafe });
@@ -137,7 +150,15 @@ function Shell() {
       <header className="bar">
         <div>
           <h1>AMPINVT Inverter</h1>
-          <div className="subtitle">TEL-48502M100 · Modbus RTU 9600 8N1 · slave 1</div>
+          <div className="subtitle">
+            TEL-48502M100 · Modbus RTU 9600 8N1 · slave 1
+            {appVersion && (
+              <>
+                {' · '}
+                <span className="mono">v{appVersion}</span>
+              </>
+            )}
+          </div>
         </div>
         <div className="spacer" />
         <ConnectionBar
@@ -263,7 +284,10 @@ function Shell() {
           onPrefsChange={setPrefs}
           phase={updater.phase}
           version={updater.update?.version}
-          currentVersion={updater.update?.currentVersion}
+          // The updater only reports currentVersion alongside an available
+          // update, so on its own it disappears exactly when you most want to
+          // confirm what is installed: right after updating.
+          currentVersion={updater.update?.currentVersion ?? appVersion ?? undefined}
           notes={updater.update?.body}
           error={updater.error}
           progress={updater.progress}
