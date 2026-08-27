@@ -62,6 +62,18 @@ including failures. A sustained 90-second run at the app's real duty cycle loses
 frames. Removing or shrinking this will produce intermittent, confusing timeouts that
 look like a hardware fault.
 
+## Unattended operation
+
+The app is built to be left running on a machine nobody is sitting at:
+
+- **Connect on startup** — on by default. Reconnects to the port used last time,
+  falling back to whatever identifies as the inverter's CH340, then the first
+  serial port. Remembering the last port matters when more than one serial device
+  is present, so a reboot cannot attach to the wrong one. Toggle is next to the
+  Connect button.
+- **Logging starts automatically** when connected, unless turned off.
+- **One log file per UTC day, never deleted.**
+
 ## Installing
 
 Grab the `.exe` installer from the [latest release](https://github.com/cinderblock/ampinvt-ui/releases/latest).
