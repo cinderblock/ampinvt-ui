@@ -151,13 +151,26 @@ export default function Dashboard({ registers, connected }: Props) {
       </section>
 
       <section>
-        <h2>What is not here</h2>
+        <h2>What is not here yet</h2>
         <p className="desc">
-          PV voltage, PV current, load power and output power have not been identified yet.
-          Every candidate register read zero while the inverter sat idle, which makes them
-          indistinguishable from the genuinely unused ones. They can only be found by
-          re-running the live diff while the unit is actually charging or under load — see
-          the Raw registers tab for a full dump to compare against.
+          Battery voltage and current, PV voltage and AC input voltage are all identified,
+          verified against the battery pack's own readout across a known step change.
+          Still missing: <strong>PV current</strong>, <strong>load power</strong> and{' '}
+          <strong>output power</strong>.
+        </p>
+        <p className="desc">
+          Two registers are known to move but not yet named:{' '}
+          <span className="mono">0x0502</span>, which tracks charge activity but is not
+          state-of-charge — it read 85 then 79 while the pack held 92% — and{' '}
+          <span className="mono">0x0509</span>/<span className="mono">0x0510</span>, which
+          mirror each other exactly but <em>rose</em> as charging stopped, ruling out PV
+          current.
+        </p>
+        <p className="desc">
+          The way to name them is a step change in <strong>load</strong> rather than
+          charge: start logging in the Raw registers tab, switch something substantial on,
+          and diff across the boundary. Anything tracking load power has to move sharply
+          there; anything that does not, is not it.
         </p>
       </section>
     </>
