@@ -1,5 +1,6 @@
 import { useSafety } from '../safety';
 import { savePrefs, type Phase, type UpdatePrefs } from '../updater';
+import ReleaseNotes from './ReleaseNotes';
 
 interface Props {
   prefs: UpdatePrefs;
@@ -91,13 +92,13 @@ export default function Updates({
           </p>
         )}
 
-        {notes && (
-          <pre
-            className="mono"
-            style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--text-secondary)' }}
-          >
-            {notes}
-          </pre>
+        {notes && notes.trim() && (
+          <div className="notes-panel">
+            <div className="notes-title">
+              Release notes{version ? <span className="mono"> {version}</span> : null}
+            </div>
+            <ReleaseNotes markdown={notes} />
+          </div>
         )}
 
         {error && phase === 'error' && (

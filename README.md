@@ -56,7 +56,9 @@ expected.
 ## Updates
 
 The app checks GitHub Releases on launch and every six hours, and verifies the release
-signature before installing anything.
+signature before installing anything. The release body is rendered as markdown in the
+Updates tab; raw HTML in a release body is ignored, and links open in the system browser
+rather than navigating the app window.
 
 **Automatic installation is opt-in and off by default.** When enabled, an available
 update installs itself once the app has been idle for a configurable period (default

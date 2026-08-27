@@ -360,6 +360,159 @@ section > .desc {
   color: var(--text-primary);
 }
 
+/* --------------------------------------------------------- release notes -- */
+
+.notes-panel {
+  margin-top: 14px;
+  max-width: 76ch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+}
+
+.notes-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.notes-title .mono {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Rendered markdown from a release body. Long notes scroll rather than pushing
+ * the auto-install settings off the bottom of the tab. */
+.notes {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notes:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.notes > :first-child {
+  margin-top: 0;
+}
+
+.notes > :last-child {
+  margin-bottom: 0;
+}
+
+.notes p {
+  margin: 0 0 8px;
+}
+
+.notes h3,
+.notes h4,
+.notes h5,
+.notes h6 {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  margin: 14px 0 6px;
+}
+
+.notes ul,
+.notes ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.notes li {
+  margin-bottom: 3px;
+}
+
+/* A GFM task list carries its own checkbox; a bullet next to it is noise. */
+.notes li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.notes li > input[type='checkbox'] {
+  margin: 0 6px 0 0;
+  vertical-align: -1px;
+}
+
+.notes strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+/* GitHub's generated notes are full of bare PR and changelog URLs; let them
+ * break rather than blow out the panel. */
+.notes a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.notes code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--page);
+}
+
+.notes pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  overflow-x: auto;
+}
+
+.notes pre code {
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.notes blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--baseline);
+  color: var(--text-muted);
+}
+
+.notes hr {
+  border: none;
+  border-top: 1px solid var(--hairline);
+  margin: 12px 0;
+}
+
+.notes table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.notes th,
+.notes td {
+  border: 1px solid var(--hairline);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.notes th {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
 /* ------------------------------------------------------------------ raw --- */
 
 table.raw {
