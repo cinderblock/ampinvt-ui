@@ -53,12 +53,20 @@ pub const ALL_BLOCKS: &[(u16, u16)] = &[
     (0x2100, 32),
 ];
 
-/// Re-emit a complete snapshot this often, so a file that gets rotated or
-/// truncated can still be read from its own beginning without the previous one.
+/// Re-emit a complete snapshot this often, so a truncated file can still be
+/// read from its own beginning.
 const FULL_SNAPSHOT_EVERY: u64 = 360;
 
-/// Rotate at this size, keeping one previous generation.
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// Log file for a given UTC day. One file per day, named from the date.
+///
+/// NOTHING IS EVER DELETED. An earlier version rotated at a size cap keeping
+/// one generation, which would silently discard data during a long unattended
+/// capture — exactly when the log matters most and nobody is watching. Measured
+/// delta size is ~153 bytes/record, about 1.3 MB/day at a 10s interval, so a
+/// fortnight is well under 20 MB. There is no reason to throw any of it away.
+fn file_for(dir: &Path, utc_day: &str) -> PathBuf {
+    dir.join(format!("ampinvt-registers-{utc_day}.jsonl"))
+}
 
 #[derive(Default)]
 pub struct Logger {
@@ -71,9 +79,12 @@ pub struct Logger {
 #[derive(Serialize)]
 pub struct LoggingStatus {
     pub running: bool,
+    /// Directory holding the daily files, not a single file.
     pub path: Option<String>,
     pub records: u64,
+    /// Total across every daily file, not just today's.
     pub bytes: u64,
+    pub files: u64,
     pub last_error: Option<String>,
 }
 
@@ -130,31 +141,35 @@ fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool) -> String {
     line
 }
 
-/// Keep one previous generation, so a rotation never silently discards the only
-/// copy of a state change someone is mid-way through investigating.
-fn rotate_if_large(path: &Path) -> std::io::Result<bool> {
-    let size = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
-        Err(_) => return Ok(false),
-    };
-    if size < MAX_BYTES {
-        return Ok(false);
+/// Total bytes and file count across every daily log in the directory.
+fn tally(dir: &Path) -> (u64, u64) {
+    let mut bytes = 0;
+    let mut files = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("ampinvt-registers-") && name.ends_with(".jsonl") {
+                if let Ok(meta) = entry.metadata() {
+                    bytes += meta.len();
+                    files += 1;
+                }
+            }
+        }
     }
-    let previous = path.with_extension("jsonl.1");
-    let _ = std::fs::remove_file(&previous);
-    std::fs::rename(path, &previous)?;
-    Ok(true)
+    (bytes, files)
 }
 
 pub fn spawn(
     link: Arc<Mutex<Option<crate::modbus::Rtu>>>,
     logger: Arc<Logger>,
-    path: PathBuf,
+    dir: PathBuf,
     interval: Duration,
 ) {
     std::thread::spawn(move || {
         let mut previous: BTreeMap<u16, u16> = BTreeMap::new();
         let mut since_full: u64 = 0;
+        let mut current_day = String::new();
 
         while logger.running.load(Ordering::Relaxed) {
             let started = Instant::now();
@@ -196,11 +211,18 @@ pub fn spawn(
             }
 
             if connected && !values.is_empty() {
-                let rotated = rotate_if_large(&path).unwrap_or(false);
-                if rotated {
+                let stamp = utc_now();
+                let day = stamp[..10].to_string();
+
+                // A new UTC day starts a new file. Nothing is deleted, ever.
+                // Each file must stand alone, so the day roll forces a full
+                // snapshot rather than a delta against yesterday's last state.
+                if day != current_day {
                     previous.clear();
                     since_full = 0;
+                    current_day = day.clone();
                 }
+                let path = file_for(&dir, &day);
 
                 // Full snapshot on the first record, periodically thereafter,
                 // and whenever the set of readable registers changes — a delta
@@ -223,7 +245,7 @@ pub fn spawn(
                 // A delta with nothing in it still gets written: the timestamp
                 // is evidence that the device was answering and simply did not
                 // change, which is different from a gap in the log.
-                let line = encode(&utc_now(), &payload, full);
+                let line = encode(&stamp, &payload, full);
 
                 let write = OpenOptions::new()
                     .create(true)
@@ -259,18 +281,15 @@ pub fn spawn(
 }
 
 pub fn status(logger: &Logger) -> LoggingStatus {
-    let path = logger.path.lock().unwrap().clone();
-    let bytes = path
-        .as_ref()
-        .and_then(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let dir = logger.path.lock().unwrap().clone();
+    let (bytes, files) = dir.as_ref().map(|d| tally(d)).unwrap_or((0, 0));
 
     LoggingStatus {
         running: logger.running.load(Ordering::Relaxed),
-        path: path.map(|p| p.display().to_string()),
+        path: dir.map(|p| p.display().to_string()),
         records: logger.records.load(Ordering::Relaxed),
         bytes,
+        files,
         last_error: logger.last_error.lock().unwrap().clone(),
     }
 }

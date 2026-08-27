@@ -252,16 +252,17 @@ fn start_logging(
         .path()
         .app_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?;
+    // One file per UTC day inside this directory; nothing is ever deleted.
+    let dir = dir.join("logs");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join("ampinvt-registers.jsonl");
 
-    *logger.path.lock().unwrap() = Some(path.clone());
+    *logger.path.lock().unwrap() = Some(dir.clone());
     logger.running.store(true, Ordering::Relaxed);
 
     logging::spawn(
         link.0.clone(),
         logger.inner().clone(),
-        path,
+        dir,
         Duration::from_secs(interval_secs.clamp(2, 3600)),
     );
 

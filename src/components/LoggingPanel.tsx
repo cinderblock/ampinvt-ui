@@ -7,7 +7,14 @@ import { loggingStatus, startLogging, stopLogging, type LoggingStatus } from '..
 const INTERVAL_KEY = 'ampinvt-ui.log-interval';
 const ENABLED_KEY = 'ampinvt-ui.log-enabled';
 
-export const DEFAULT_INTERVAL = 10;
+/**
+ * 5s rather than 10s: a full 13-block sweep costs ~1.6s of bus time, so this
+ * runs at roughly a third duty cycle and leaves ample room for the UI poller,
+ * while doubling the resolution of any transient worth catching. Storage is not
+ * the constraint — delta records are ~153 bytes, so even a fortnight is tens of
+ * megabytes.
+ */
+export const DEFAULT_INTERVAL = 5;
 
 export function loadLogEnabled(): boolean {
   return localStorage.getItem(ENABLED_KEY) !== 'false';
@@ -106,7 +113,8 @@ export default function LoggingPanel({ connected }: Props) {
         {status && (
           <span className="subtitle">
             {status.records.toLocaleString()} records
-            {status.bytes > 0 && <> · {formatBytes(status.bytes)}</>}
+            {status.files > 0 && <> · {status.files} daily {status.files === 1 ? 'file' : 'files'}</>}
+            {status.bytes > 0 && <> · {formatBytes(status.bytes)} total</>}
             {status.bytes > 0 && status.records > 20 && (
               <> · ~{formatBytes(perDay(status.bytes, status.records, interval))}/day</>
             )}
@@ -134,15 +142,23 @@ export default function LoggingPanel({ connected }: Props) {
       )}
 
       <p className="desc" style={{ marginTop: 12 }}>
-        Delta-encoded. A record marked <span className="mono">"full":true</span> carries
-        every register; the ones after it carry only what changed, with a fresh full
-        snapshot each hour so the file stays readable from its own start. Around 343 of the
-        384 registers never move, so this is far smaller than it sounds — full dumps cost
-        ~3.7&nbsp;kB each, roughly 32&nbsp;MB/day at a 10&nbsp;second interval.
-        <br />
-        Rotates at 32&nbsp;MB keeping one previous generation
-        (<span className="mono">.jsonl.1</span>). Timestamps are UTC ISO-8601 so they can be
-        re-bucketed losslessly; keys are decimal register addresses.
+        <strong>One file per UTC day, and nothing is ever deleted.</strong> Each day stands
+        alone, starting with a complete snapshot, so no file depends on the one before it.
+        Named <span className="mono">ampinvt-registers-YYYY-MM-DD.jsonl</span>.
+      </p>
+      <p className="desc">
+        Delta-encoded: a record marked <span className="mono">"full":true</span> carries
+        every register, and the ones after it carry only what changed, with a fresh
+        snapshot hourly. About 343 of the 384 registers never move and only ~10 change per
+        sample, so records average ~153&nbsp;bytes against ~3.7&nbsp;kB for a full dump —
+        roughly <strong>2.6&nbsp;MB/day</strong> at 5&nbsp;seconds. A fortnight is well
+        under 50&nbsp;MB.
+      </p>
+      <p className="desc">
+        Timestamps are UTC ISO-8601 so they can be re-bucketed losslessly; keys are decimal
+        register addresses. Read them with <span className="mono">tools/logreader.py</span>,
+        which reconstructs full state — parsing a delta record as a snapshot is silently
+        wrong.
       </p>
     </section>
   );

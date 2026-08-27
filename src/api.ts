@@ -76,10 +76,12 @@ export const discoverBlocks = (stride: number) =>
 
 export interface LoggingStatus {
   running: boolean;
+  /** Directory holding the daily files, not a single file. */
   path: string | null;
   records: number;
-  /** Current size of the log file on disk. */
+  /** Total across every daily file, not just today's. */
   bytes: number;
+  files: number;
   last_error: string | null;
 }
 
