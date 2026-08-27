@@ -137,6 +137,24 @@ export default function LoggingPanel({ connected }: Props) {
         </p>
       )}
 
+      {status && status.partials > 0 && status.failures === 0 && (
+        <div className="banner" style={{ marginTop: 14, marginBottom: 0 }}>
+          <span className="icon" aria-hidden="true">
+            !
+          </span>
+          <div className="body">
+            <strong>
+              {status.partials.toLocaleString()} sweep
+              {status.partials === 1 ? '' : 's'} read only some blocks.
+            </strong>{' '}
+            The link is dropping frames rather than failing outright. Worth watching: in
+            the one episode captured in full, partial reads climbed steadily for about
+            twenty minutes and then the device stopped answering altogether. A rising count
+            here is the warning that precedes a stall, not background noise.
+          </div>
+        </div>
+      )}
+
       {status && status.failures > 0 && (
         <div className="banner critical" style={{ marginTop: 14, marginBottom: 0 }}>
           <span className="icon" aria-hidden="true">

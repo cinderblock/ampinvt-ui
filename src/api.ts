@@ -87,6 +87,12 @@ export interface LoggingStatus {
   records: number;
   /** Sweeps that produced no usable data — the device went mute. */
   failures: number;
+  /**
+   * Sweeps that read some blocks but not all. In the one captured episode these
+   * climbed for twenty minutes before the link failed completely, so they are
+   * the early warning rather than mere noise.
+   */
+  partials: number;
   /** Total across every daily file, not just today's. */
   bytes: number;
   files: number;

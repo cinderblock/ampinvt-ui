@@ -75,6 +75,10 @@ pub struct Logger {
     /// Sweeps that produced no usable data. Surfaced so a device going mute is
     /// visible in the UI rather than only discoverable by reading the log.
     pub failures: Arc<AtomicU64>,
+    /// Sweeps that read some blocks but not all. These preceded a total failure
+    /// by twenty minutes in the one episode captured, climbing in frequency
+    /// beforehand, so they are the early warning worth watching.
+    pub partials: Arc<AtomicU64>,
     pub path: Mutex<Option<PathBuf>>,
     pub last_error: Arc<Mutex<Option<String>>>,
 }
@@ -87,6 +91,8 @@ pub struct LoggingStatus {
     pub records: u64,
     /// Sweeps that produced no usable data.
     pub failures: u64,
+    /// Sweeps that read some blocks but not all — the early-warning signal.
+    pub partials: u64,
     /// Total across every daily file, not just today's.
     pub bytes: u64,
     pub files: u64,
@@ -131,13 +137,24 @@ fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool) -> String {
+/// `failed` counts blocks that did not answer during an otherwise usable sweep.
+///
+/// Recorded explicitly rather than left to be inferred from how many registers
+/// a snapshot happens to contain. That inference is indirect and easy to get
+/// wrong — a single missing block is 352 registers of 384, which looks entirely
+/// normal unless you know the exact expected total. Partial reads turned out to
+/// be the leading indicator of a link about to fail completely, so they need to
+/// be unmistakable in the log rather than reconstructable from it.
+fn encode(stamp: &str, regs: &BTreeMap<u16, u16>, full: bool, failed: usize) -> String {
     let mut line = String::with_capacity(regs.len() * 12 + 48);
     line.push_str("{\"t\":\"");
     line.push_str(stamp);
     line.push('"');
     if full {
         line.push_str(",\"full\":true");
+    }
+    if failed > 0 {
+        line.push_str(&format!(",\"failed\":{failed}"));
     }
     line.push_str(",\"regs\":{");
     for (i, (addr, value)) in regs.iter().enumerate() {
@@ -291,7 +308,10 @@ pub fn spawn(
                 };
 
                 since_full = if full { 0 } else { since_full + 1 };
-                (encode(&stamp, &payload, full), true)
+                if failed_blocks > 0 {
+                    logger.partials.fetch_add(1, Ordering::Relaxed);
+                }
+                (encode(&stamp, &payload, full, failed_blocks), true)
             } else {
                 consecutive_failures += 1;
                 let reason = first_error.clone().unwrap_or_else(|| {
@@ -375,6 +395,7 @@ pub fn status(logger: &Logger) -> LoggingStatus {
         path: dir.map(|p| p.display().to_string()),
         records: logger.records.load(Ordering::Relaxed),
         failures: logger.failures.load(Ordering::Relaxed),
+        partials: logger.partials.load(Ordering::Relaxed),
         bytes,
         files,
         last_error: logger.last_error.lock().unwrap().clone(),
@@ -398,14 +419,14 @@ mod tests {
     fn full_records_are_marked_and_deltas_are_not() {
         let mut regs = BTreeMap::new();
         regs.insert(0x0500u16, 541u16);
-        assert!(encode("T", &regs, true).contains("\"full\":true"));
-        assert!(!encode("T", &regs, false).contains("full"));
+        assert!(encode("T", &regs, true, 0).contains("\"full\":true"));
+        assert!(!encode("T", &regs, false, 0).contains("full"));
     }
 
     #[test]
     fn encoding_uses_decimal_addresses() {
         let mut regs = BTreeMap::new();
         regs.insert(0x0500u16, 541u16);
-        assert!(encode("T", &regs, false).contains("\"1280\":541"));
+        assert!(encode("T", &regs, false, 0).contains("\"1280\":541"));
     }
 }
