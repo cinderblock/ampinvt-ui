@@ -241,6 +241,31 @@ export const REGISTERS: RegisterDef[] = [
     note: 'PV and AC combined. Roughly battery power / 0.86 plus ~36 W standby.',
   },
   {
+    key: 'loadIndicator',
+    addr: 0x061c,
+    label: 'Load',
+    kind: 'live',
+    scale: 1,
+    decimals: 0,
+    confidence: 'medium',
+    /*
+     * Identified by toggling a ~140 W load while logging. Comparing period
+     * means rather than a single transition, because solar was swinging by more
+     * than the load and a one-sample diff could not have separated them:
+     *
+     *   load off, 77 samples:  0.2
+     *   load on,  25 samples: 19.5
+     *   signal (delta / noise): 20.4  — next strongest register scored 2.7
+     *
+     * THE UNIT IS NOT ESTABLISHED. The same step showed 3.2 A leaving the
+     * charge current at 54.5 V, so ~174 W DC and ~148 W AC after conversion.
+     * Against 19.5 counts that is ~7.6 W per count, which is not a round
+     * number in any obvious unit — so treat this as "a load is present and
+     * roughly how big" until a second load of known size pins the scale.
+     */
+    note: 'Zero with no load. Scale unresolved — a second known load would settle it.',
+  },
+  {
     key: 'runtimeCounter',
     addr: 0x0612,
     label: 'Runtime counter',
