@@ -88,10 +88,20 @@ impl From<ModbusError> for String {
 ///   10ms 15/30   15ms 19/30   20ms 21/30   25ms 29/30   30ms 30/30   60ms 30/30
 ///
 /// Below the threshold it answers roughly every *other* request — a burst at
-/// 0ms gap scores exactly 13/25, which is a perfect alternating pattern. 50ms
-/// gives comfortable margin over the observed 30ms threshold and matches what
-/// the Python tooling used, which ran for hours without a single lost frame.
-const INTER_FRAME: Duration = Duration::from_millis(50);
+/// 0ms gap scores exactly 13/25, which is a perfect alternating pattern.
+///
+/// Raised 50ms -> 100ms after forensics found the link shedding frames under
+/// load, with timeouts rather than corruption as the suspected mode: the MCU
+/// appears too busy converting to service its UART promptly. If that is right,
+/// the lever is giving it more room between requests, and 50ms was only 1.7x
+/// the measured threshold. 100ms is 3.3x.
+///
+/// It is not free. A 32-register exchange is ~80ms on the wire, so a block
+/// costs ~180ms instead of ~130ms and a full 13-block sweep goes 1.7s -> 2.3s.
+/// The logging interval was moved to 10s to keep total bus duty near 60% —
+/// leave headroom, because retries generate their own traffic precisely when
+/// the link is already struggling.
+const INTER_FRAME: Duration = Duration::from_millis(100);
 
 /// Extra quiet before retrying a failed exchange, on top of INTER_FRAME.
 ///
@@ -108,6 +118,10 @@ pub struct Rtu {
     /// When the last transaction finished, so the gap is enforced without
     /// penalising a caller that was already slow.
     last_txn: Option<Instant>,
+    /// Adjustable at runtime. The right value is not known from theory — it
+    /// depends on why this device sheds frames, which is still open — so it is
+    /// a knob to be measured rather than a constant to be guessed.
+    inter_frame: Duration,
 }
 
 /// Windows needs the `\\.\` prefix for COM10 and above; COM1-9 work bare.
@@ -150,7 +164,22 @@ impl Rtu {
             port,
             slave,
             last_txn: None,
+            inter_frame: INTER_FRAME,
         })
+    }
+
+    /// Change the inter-frame gap on a live connection.
+    ///
+    /// Clamped to 10ms..=5s. Below the measured 30ms threshold this device
+    /// answers only every other request, so anything under that is a way to
+    /// break the link rather than tune it; the floor is deliberately just low
+    /// enough to demonstrate that.
+    pub fn set_inter_frame(&mut self, ms: u64) {
+        self.inter_frame = Duration::from_millis(ms.clamp(10, 5_000));
+    }
+
+    pub fn inter_frame_ms(&self) -> u64 {
+        self.inter_frame.as_millis() as u64
     }
 
     fn transact(&mut self, request: &[u8], expect_fc: u8) -> Result<Vec<u8>, ModbusError> {
@@ -158,8 +187,8 @@ impl Rtu {
         // every other request; see INTER_FRAME for the measurements.
         if let Some(last) = self.last_txn {
             let since = last.elapsed();
-            if since < INTER_FRAME {
-                std::thread::sleep(INTER_FRAME - since);
+            if since < self.inter_frame {
+                std::thread::sleep(self.inter_frame - since);
             }
         }
 

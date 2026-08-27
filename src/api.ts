@@ -119,3 +119,9 @@ export function toRegisterMap(blocks: BlockResult[]): Map<number, number> {
   }
   return map;
 }
+
+/**
+ * Adjust the inter-frame gap on the live connection. Returns the value the
+ * backend actually applied, which is clamped to 10ms..=5s.
+ */
+export const setInterFrame = (ms: number) => invoke<number>('set_inter_frame', { ms });

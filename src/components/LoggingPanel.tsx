@@ -2,19 +2,38 @@ import { useEffect, useState } from 'react';
 
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 
-import { loggingStatus, startLogging, stopLogging, type LoggingStatus } from '../api';
+import {
+  loggingStatus,
+  setInterFrame,
+  startLogging,
+  stopLogging,
+  type LoggingStatus,
+} from '../api';
 
 const INTERVAL_KEY = 'ampinvt-ui.log-interval';
 const ENABLED_KEY = 'ampinvt-ui.log-enabled';
+const GAP_KEY = 'ampinvt-ui.inter-frame-ms';
+
+/** Matches INTER_FRAME in modbus.rs; 3.3x the measured 30ms threshold. */
+export const DEFAULT_GAP_MS = 100;
+
+export function loadGapMs(): number {
+  const raw = Number(localStorage.getItem(GAP_KEY));
+  return Number.isFinite(raw) && raw >= 10 ? raw : DEFAULT_GAP_MS;
+}
 
 /**
- * 5s rather than 10s: a full 13-block sweep costs ~1.6s of bus time, so this
- * runs at roughly a third duty cycle and leaves ample room for the UI poller,
- * while doubling the resolution of any transient worth catching. Storage is not
- * the constraint — delta records are ~153 bytes, so even a fortnight is tens of
- * megabytes.
+ * Raised 5s -> 10s alongside the 50ms -> 100ms inter-frame gap.
+ *
+ * A 13-block sweep costs ~2.3s of bus time at 100ms, so a 5s interval would
+ * spend 46% of the bus on logging before the UI poller is counted, and retries
+ * add more traffic exactly when the link is already struggling. 10s keeps total
+ * duty near 60% with real headroom.
+ *
+ * Storage is not the constraint — delta records are ~153 bytes, so a fortnight
+ * is tens of megabytes either way. Bus headroom is.
  */
-export const DEFAULT_INTERVAL = 5;
+export const DEFAULT_INTERVAL = 10;
 
 export function loadLogEnabled(): boolean {
   return localStorage.getItem(ENABLED_KEY) !== 'false';
@@ -51,6 +70,7 @@ export default function LoggingPanel({ connected }: Props) {
   const [enabled, setEnabled] = useState(loadLogEnabled);
   const [interval, setIntervalSecs] = useState(loadLogInterval);
   const [error, setError] = useState<string | null>(null);
+  const [gapMs, setGapMs] = useState(loadGapMs);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -179,6 +199,41 @@ export default function LoggingPanel({ connected }: Props) {
       {(error || status?.last_error) && (
         <p className="desc err">{error ?? status?.last_error}</p>
       )}
+
+      <div className="setting" style={{ marginTop: 16 }}>
+        <div>
+          <div className="name">Inter-frame gap</div>
+          <div className="note">
+            Silence enforced between one reply and the next request. The device needs at
+            least 30&nbsp;ms — measured — or it answers only every other request. Longer
+            gaps help if the inverter's MCU is too busy converting to service its UART,
+            and do nothing if frames are being corrupted instead, so the failure counts
+            above are how to tell whether raising it worked.
+            <br />
+            Costs bus time: a 13-block sweep takes ~1.7&nbsp;s at 50&nbsp;ms,
+            ~2.3&nbsp;s at 100&nbsp;ms and ~14&nbsp;s at 1&nbsp;s. Keep the logging
+            interval comfortably above the sweep time.
+          </div>
+        </div>
+        <div className="current" />
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            type="number"
+            min={10}
+            max={5000}
+            step={10}
+            value={gapMs}
+            disabled={!connected}
+            onChange={(e) => {
+              const next = Math.max(10, Number(e.target.value) || DEFAULT_GAP_MS);
+              setGapMs(next);
+              localStorage.setItem(GAP_KEY, String(next));
+              void setInterFrame(next).catch((err) => setError(String(err)));
+            }}
+          />
+          <span className="subtitle">ms</span>
+        </div>
+      </div>
 
       <p className="desc" style={{ marginTop: 12 }}>
         <strong>One file per UTC day, and nothing is ever deleted.</strong> Each day stands

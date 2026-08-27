@@ -5,11 +5,16 @@ import { FAST_BLOCKS, POLL_BLOCKS, SLOW_BLOCKS } from './registers';
 import {
   readBlocks,
   reconnect,
+  setInterFrame,
   startLogging,
   toRegisterMap,
   type BlockResult,
 } from './api';
-import LoggingPanel, { loadLogEnabled, loadLogInterval } from './components/LoggingPanel';
+import LoggingPanel, {
+  loadGapMs,
+  loadLogEnabled,
+  loadLogInterval,
+} from './components/LoggingPanel';
 import { SafetyProvider, useSafety } from './safety';
 import { loadPrefs, useUpdater, type UpdatePrefs } from './updater';
 import ConnectionBar from './components/ConnectionBar';
@@ -119,7 +124,11 @@ function Shell() {
   // Logging is on by default: the data is only capturable while the event is
   // happening, and a missed solar ramp cannot be recovered later.
   useEffect(() => {
-    if (!connected || !loadLogEnabled()) return;
+    if (!connected) return;
+    // Re-apply the saved gap: a fresh connection opens at the compiled default,
+    // so without this any tuning would silently revert on every reconnect.
+    void setInterFrame(loadGapMs()).catch(() => undefined);
+    if (!loadLogEnabled()) return;
     void startLogging(loadLogInterval()).catch(() => undefined);
   }, [connected]);
 

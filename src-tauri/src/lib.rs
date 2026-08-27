@@ -19,6 +19,8 @@ pub struct ConnParams {
     pub path: String,
     pub baud: u32,
     pub slave: u8,
+    /// Carried across reconnects so tuning is not silently lost on recovery.
+    pub inter_frame_ms: Option<u64>,
 }
 
 /// Shared so the background logger thread can use the same port as the UI
@@ -126,7 +128,7 @@ async fn connect(
         *port.lock().unwrap() = Some(rtu);
         // Remembered so the logger can reopen the port on its own after a
         // sustained failure, with nobody present to press Connect.
-        *params.lock().unwrap() = Some(ConnParams { path, baud, slave });
+        *params.lock().unwrap() = Some(ConnParams { path, baud, slave, inter_frame_ms: None });
         Ok(())
     })
     .await
@@ -171,7 +173,12 @@ pub fn recover(
         *guard = None;
     }
 
-    if let Ok(fresh) = Rtu::open(&saved.path, saved.baud, saved.slave) {
+    if let Ok(mut fresh) = Rtu::open(&saved.path, saved.baud, saved.slave) {
+        // Re-apply tuning. A recovery that silently reverted to the default gap
+        // would quietly invalidate whatever experiment was running.
+        if let Some(ms) = saved.inter_frame_ms {
+            fresh.set_inter_frame(ms);
+        }
         *rtu.lock().map_err(|_| "port lock poisoned")? = Some(fresh);
         return Ok(saved.path);
     }
@@ -185,7 +192,10 @@ pub fn recover(
         if !is_ch340 || port.port_name == saved.path {
             continue;
         }
-        if let Ok(fresh) = Rtu::open(&port.port_name, saved.baud, saved.slave) {
+        if let Ok(mut fresh) = Rtu::open(&port.port_name, saved.baud, saved.slave) {
+            if let Some(ms) = saved.inter_frame_ms {
+                fresh.set_inter_frame(ms);
+            }
             *rtu.lock().map_err(|_| "port lock poisoned")? = Some(fresh);
             // Remember the new number, or every later recovery repeats the hunt.
             if let Ok(mut p) = params.lock() {
@@ -209,6 +219,31 @@ async fn reconnect(link: State<'_, Link>) -> Result<String, String> {
     let rtu = link.rtu.clone();
     let params = link.params.clone();
     off_thread(move || recover(&rtu, &params)).await
+}
+
+/// Set the inter-frame gap on the live connection, and remember it so a
+/// reconnect keeps the same timing.
+///
+/// Exposed as a knob because the correct value is an open question. The device
+/// sheds frames under load and the cause is not settled — starvation would be
+/// helped by a longer gap, corruption would not — so this is something to
+/// measure against the failure counters rather than fix by argument.
+#[tauri::command]
+async fn set_inter_frame(link: State<'_, Link>, ms: u64) -> Result<u64, String> {
+    let rtu = link.rtu.clone();
+    let params = link.params.clone();
+    off_thread(move || {
+        if let Ok(mut p) = params.lock() {
+            if let Some(existing) = p.as_mut() {
+                existing.inter_frame_ms = Some(ms);
+            }
+        }
+        let mut guard = rtu.lock().map_err(|_| "port lock poisoned")?;
+        let port = guard.as_mut().ok_or("not connected")?;
+        port.set_inter_frame(ms);
+        Ok(port.inter_frame_ms())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -388,6 +423,7 @@ pub fn run() {
             list_ports,
             connect,
             reconnect,
+            set_inter_frame,
             disconnect,
             is_connected,
             read_blocks,
