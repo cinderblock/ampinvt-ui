@@ -29,8 +29,40 @@ export const disconnect = () => invoke<void>('disconnect');
 
 export const isConnected = () => invoke<boolean>('is_connected');
 
+/**
+ * Reject if a call has not settled in time.
+ *
+ * A serial read that wedges in the driver would otherwise leave the promise
+ * pending forever, latching the poller's in-flight guard and silently stopping
+ * all updates with no error shown. Better to fail loudly and retry.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${what} did not respond within ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export const readBlocks = (blocks: { addr: number; count: number }[]) =>
-  invoke<BlockResult[]>('read_blocks', { blocks });
+  withTimeout(
+    invoke<BlockResult[]>('read_blocks', { blocks }),
+    // Generous: each block is ~120ms of bus time, and the logger may hold the
+    // port for a block or two in between.
+    5000 + blocks.length * 1000,
+    'read_blocks',
+  );
 
 /**
  * Guarded write. `expect` is the value the UI last read; the backend refuses if

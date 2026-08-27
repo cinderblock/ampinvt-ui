@@ -287,6 +287,16 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(Link::default())
         .manage(Arc::new(Logger::default()))
+        // Stop the logger thread when the app is closing. Without this the
+        // process can linger holding the serial port, which looks like a hang
+        // and needs Task Manager to clear.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(logger) = window.try_state::<Arc<Logger>>() {
+                    logger.running.store(false, Ordering::Relaxed);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_ports,
             connect,

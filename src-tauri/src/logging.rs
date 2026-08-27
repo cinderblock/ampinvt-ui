@@ -99,19 +99,39 @@ pub fn spawn(
 
             let mut values: Vec<(u16, u16)> = Vec::new();
             let mut connected = false;
-            {
-                let mut guard = link.lock().unwrap();
-                if let Some(rtu) = guard.as_mut() {
-                    connected = true;
-                    for (addr, count) in ALL_BLOCKS {
+
+            // Take the lock per block, not for the whole sweep.
+            //
+            // With the 50ms inter-frame gap a full 13-block sweep is ~1.6s of
+            // bus time. Holding the port lock for all of it starves every UI
+            // command behind it, and if one read ever wedges, the lock is held
+            // forever and the app cannot even shut down — which is exactly the
+            // hang seen in v0.4.0.
+            //
+            // Interleaving is safe: the inter-frame gap is enforced inside the
+            // shared Rtu against its own last-transaction time, so a UI read
+            // slipping between two logger reads still respects it.
+            for (addr, count) in ALL_BLOCKS {
+                if !logger.running.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut guard = match link.lock() {
+                    Ok(g) => g,
+                    Err(_) => break, // poisoned: another thread panicked
+                };
+                match guard.as_mut() {
+                    Some(rtu) => {
+                        connected = true;
                         if let Ok(regs) = rtu.read_holding(*addr, *count) {
                             for (i, v) in regs.iter().enumerate() {
                                 values.push((addr + i as u16, *v));
                             }
                         }
                     }
+                    None => break, // disconnected mid-sweep
                 }
-            } // lock released before any file I/O
+                drop(guard);
+            }
 
             if connected && !values.is_empty() {
                 let mut line = String::with_capacity(values.len() * 12 + 40);
@@ -143,9 +163,15 @@ pub fn spawn(
                 }
             }
 
+            // Sleep in slices so stopping — or quitting the app — is noticed
+            // promptly instead of after up to a full interval.
             let elapsed = started.elapsed();
-            if interval > elapsed {
-                std::thread::sleep(interval - elapsed);
+            let mut remaining = interval.saturating_sub(elapsed);
+            let slice = Duration::from_millis(200);
+            while remaining > Duration::ZERO && logger.running.load(Ordering::Relaxed) {
+                let step = remaining.min(slice);
+                std::thread::sleep(step);
+                remaining -= step;
             }
         }
     });
