@@ -25,6 +25,12 @@ export const listPorts = () => invoke<PortInfo[]>('list_ports');
 export const connect = (path: string, baud: number, slave: number) =>
   invoke<void>('connect', { path, baud, slave });
 
+/**
+ * Reopen the port, following the device if Windows renumbered it. Returns the
+ * port actually connected to, which may differ from the one originally chosen.
+ */
+export const reconnect = () => invoke<string>('reconnect');
+
 export const disconnect = () => invoke<void>('disconnect');
 
 export const isConnected = () => invoke<boolean>('is_connected');

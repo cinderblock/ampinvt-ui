@@ -142,6 +142,75 @@ async fn disconnect(link: State<'_, Link>) -> Result<(), String> {
     .await
 }
 
+/// Reopen the serial port, following the device if Windows renumbered it.
+///
+/// Two distinct failures land here and both must be handled:
+///
+///   * the handle is stale but the port still exists — reopening the same path
+///     fixes it, which is the ordinary "unplugged for a moment" case;
+///   * the device came back on a *different* COM number, which Windows will do
+///     whenever it is replugged into another USB socket. Pinning the remembered
+///     path would then fail forever, so fall back to hunting the CH340 by
+///     VID/PID and adopt whatever port it now occupies.
+///
+/// Shared by the background logger and the `reconnect` command so recovery does
+/// not depend on logging being switched on.
+pub fn recover(
+    rtu: &Arc<Mutex<Option<Rtu>>>,
+    params: &Arc<Mutex<Option<ConnParams>>>,
+) -> Result<String, String> {
+    let saved = params
+        .lock()
+        .map_err(|_| "connection parameters lock poisoned")?
+        .clone()
+        .ok_or("no saved connection parameters — connect once first")?;
+
+    // Drop the old handle before reopening. Windows will not hand back a port
+    // the process still holds open.
+    if let Ok(mut guard) = rtu.lock() {
+        *guard = None;
+    }
+
+    if let Ok(fresh) = Rtu::open(&saved.path, saved.baud, saved.slave) {
+        *rtu.lock().map_err(|_| "port lock poisoned")? = Some(fresh);
+        return Ok(saved.path);
+    }
+
+    let ports = serialport::available_ports().map_err(|e| e.to_string())?;
+    for port in ports {
+        let is_ch340 = matches!(
+            &port.port_type,
+            serialport::SerialPortType::UsbPort(usb) if usb.vid == 0x1a86 && usb.pid == 0x7523
+        );
+        if !is_ch340 || port.port_name == saved.path {
+            continue;
+        }
+        if let Ok(fresh) = Rtu::open(&port.port_name, saved.baud, saved.slave) {
+            *rtu.lock().map_err(|_| "port lock poisoned")? = Some(fresh);
+            // Remember the new number, or every later recovery repeats the hunt.
+            if let Ok(mut p) = params.lock() {
+                *p = Some(ConnParams {
+                    path: port.port_name.clone(),
+                    ..saved
+                });
+            }
+            return Ok(port.port_name);
+        }
+    }
+
+    Err(format!(
+        "could not reopen {} and no CH340 found on any other port",
+        saved.path
+    ))
+}
+
+#[tauri::command]
+async fn reconnect(link: State<'_, Link>) -> Result<String, String> {
+    let rtu = link.rtu.clone();
+    let params = link.params.clone();
+    off_thread(move || recover(&rtu, &params)).await
+}
+
 #[tauri::command]
 async fn is_connected(link: State<'_, Link>) -> Result<bool, String> {
     let port = link.rtu.clone();
@@ -318,6 +387,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_ports,
             connect,
+            reconnect,
             disconnect,
             is_connected,
             read_blocks,

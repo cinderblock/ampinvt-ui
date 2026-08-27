@@ -73,6 +73,41 @@ The app is built to be left running on a machine nobody is sitting at:
   Connect button.
 - **Logging starts automatically** when connected, unless turned off.
 - **One log file per UTC day, never deleted.**
+- **Failed sweeps are recorded**, not skipped — see below.
+- **The port reopens itself** after three consecutive failures.
+
+### Recovering from a USB drop
+
+If the adapter is unplugged and replugged, the app reopens the port on its own. Two
+distinct failures are handled, and the second is easy to miss:
+
+1. **Stale handle, same port.** Reopening the remembered path fixes it.
+2. **The device came back on a different COM number.** Windows renumbers whenever the
+   adapter is plugged into another socket. Pinning the remembered path would fail
+   forever, so recovery falls back to hunting the CH340 by VID/PID (`1A86:7523`) and
+   adopts whatever port it now occupies, remembering the new number.
+
+Recovery is driven from **both** the logger and the UI poller, deliberately — if it lived
+only in the logger it would silently not exist whenever logging was switched off.
+
+What it cannot fix is an inverter that is powered but mute. That is the point of logging
+failures: a reopen that succeeds and still reads nothing tells you the link is fine and
+the device is not, which is a different fault with a different cause.
+
+### Failure records
+
+A sweep that returns no data writes a record rather than nothing at all:
+
+```json
+{"t":"2026-08-27T04:12:05Z","ok":false,"failed":13,"blocks":13,"err":"0x0500: no reply (timeout)"}
+```
+
+Without these a mute device produced *no records*, which is indistinguishable from the app
+never having run — no timestamp, no reason, nothing to correlate against.
+
+`tools/outages.py` separates the two failure modes, because they have different causes:
+a run of failure records means the device was mute while the app polled; a gap with no
+records at all means the app was not running or the machine slept.
 
 ## Installing
 

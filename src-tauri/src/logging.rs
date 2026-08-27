@@ -305,25 +305,15 @@ pub fn spawn(
                 // Reopen the port after a run of failures. A wedged driver
                 // handle recovers from this; a mute device does not — which is
                 // itself the diagnostic, recorded in the note.
-                let note = if connected && consecutive_failures % REOPEN_AFTER == 0 {
-                    let saved = params.lock().ok().and_then(|p| p.clone());
-                    match saved {
-                        Some(p) => {
-                            let outcome = match crate::modbus::Rtu::open(&p.path, p.baud, p.slave) {
-                                Ok(fresh) => {
-                                    if let Ok(mut guard) = link.lock() {
-                                        *guard = Some(fresh);
-                                        format!("reopened {} after {} failures", p.path, consecutive_failures)
-                                    } else {
-                                        "reopen skipped: port lock poisoned".to_string()
-                                    }
-                                }
-                                Err(e) => format!("reopen of {} failed: {e}", p.path),
-                            };
-                            Some(outcome)
+                let note = if consecutive_failures % REOPEN_AFTER == 0 {
+                    // Shared with the `reconnect` command, so this also follows
+                    // the device if Windows renumbered the COM port.
+                    Some(match crate::recover(&link, &params) {
+                        Ok(path) => {
+                            format!("reopened on {path} after {consecutive_failures} failures")
                         }
-                        None => Some("reopen skipped: no saved connection parameters".to_string()),
-                    }
+                        Err(e) => format!("reopen failed: {e}"),
+                    })
                 } else {
                     None
                 };

@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import './styles.css';
 import { FAST_BLOCKS, POLL_BLOCKS, SLOW_BLOCKS } from './registers';
-import { readBlocks, startLogging, toRegisterMap, type BlockResult } from './api';
+import {
+  readBlocks,
+  reconnect,
+  startLogging,
+  toRegisterMap,
+  type BlockResult,
+} from './api';
 import LoggingPanel, { loadLogEnabled, loadLogInterval } from './components/LoggingPanel';
 import { SafetyProvider, useSafety } from './safety';
 import { loadPrefs, useUpdater, type UpdatePrefs } from './updater';
@@ -24,6 +30,8 @@ const POLL_MS = 1000;
 const MAX_POLL_MS = 15000;
 /** Settings and identity barely move; a write re-reads them immediately anyway. */
 const SLOW_POLL_MS = 15000;
+/** Consecutive fully-failed polls before trying to reopen the port. */
+const RECONNECT_AFTER = 3;
 
 function Shell() {
   const [connected, setConnected] = useState(false);
@@ -31,6 +39,7 @@ function Shell() {
   const [registers, setRegisters] = useState<Map<number, number>>(new Map());
   const [blocks, setBlocks] = useState<BlockResult[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [recovery, setRecovery] = useState<string | null>(null);
   const [lastRead, setLastRead] = useState<Date | null>(null);
   const [prefs, setPrefs] = useState<UpdatePrefs>(() => loadPrefs());
 
@@ -71,6 +80,16 @@ function Shell() {
       // once a single block reads cleanly again.
       const allFailed = results.every((r) => r.error !== null);
       failStreak.current = allFailed ? failStreak.current + 1 : 0;
+
+      // Recovery must not depend on logging being switched on, so the poller
+      // reopens the port too. `reconnect` also follows the device if Windows
+      // renumbered the COM port, which is what happens when USB is replugged
+      // into a different socket.
+      if (failStreak.current > 0 && failStreak.current % RECONNECT_AFTER === 0) {
+        void reconnect()
+          .then((path) => setRecovery(`reopened on ${path}`))
+          .catch((err) => setRecovery(String(err)));
+      }
       setPollMs(
         failStreak.current === 0
           ? POLL_MS
@@ -169,6 +188,12 @@ function Shell() {
                 : `${failedBlocks.length} of ${blocks.length} register blocks failed to read.`}
             </strong>{' '}
             Values shown as <span className="mono">—</span> are missing, not zero.
+            {recovery && (
+              <>
+                <br />
+                Recovery: {recovery}
+              </>
+            )}
             <br />
             {failedBlocks.map((b) => (
               <span key={b.addr} className="mono" style={{ marginRight: 12 }}>
