@@ -159,12 +159,18 @@ export default function Dashboard({ registers, connected }: Props) {
           <strong>output power</strong>.
         </p>
         <p className="desc">
-          Two registers are known to move but not yet named:{' '}
-          <span className="mono">0x0502</span>, which tracks charge activity but is not
-          state-of-charge — it read 85 then 79 while the pack held 92% — and{' '}
-          <span className="mono">0x0509</span>/<span className="mono">0x0510</span>, which
-          mirror each other exactly but <em>rose</em> as charging stopped, ruling out PV
-          current.
+          <span className="mono">0x0502</span> is likely the inverter's{' '}
+          <strong>own</strong> state-of-charge estimate. With no BMS link it can only infer
+          SOC from voltage, so it will disagree with the battery pack, which counts
+          coulombs — the two are different quantities, not a contradiction. It stays within
+          45–100, caps at exactly 100, and correlates 0.47 with battery voltage: too loose
+          for a raw voltage lookup, about right for a smoothed one.
+        </p>
+        <p className="desc">
+          <span className="mono">0x0510</span> is the strongest unidentified signal —
+          correlating 0.84 with battery voltage across 517 samples.{' '}
+          <span className="mono">0x0509</span> matched it exactly across one charge step but
+          diverges over longer windows, so they are not the same quantity.
         </p>
         <p className="desc">
           The way to name them is a step change in <strong>load</strong> rather than

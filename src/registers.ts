@@ -167,14 +167,20 @@ export const REGISTERS: RegisterDef[] = [
     note: 'Reads 0 with no mains present. Went 107.6 V -> 0 the moment the wall charger was unplugged.',
   },
   {
-    key: 'live0502',
+    key: 'estimatedSoc',
     addr: 0x0502,
-    label: 'Unidentified (0x0502)',
+    label: 'Estimated state of charge',
     kind: 'live',
     scale: 1,
     decimals: 0,
+    unit: '%',
     confidence: 'low',
-    note: 'Moves with charge activity but is not SOC — read 85 then 79 while the pack held 92%.',
+    note:
+      "Probably the inverter's OWN estimate, not the pack's. There is no BMS link, so " +
+      'it can only infer SOC from voltage — and it will disagree with the pack, which ' +
+      'counts coulombs. Observed 45–100, capping at exactly 100, and correlating 0.47 ' +
+      'with battery voltage over 517 samples: too loose for a raw voltage lookup, about ' +
+      'right for a smoothed or load-compensated one. Treat as indicative only.',
   },
   {
     key: 'live0509',
@@ -184,7 +190,21 @@ export const REGISTERS: RegisterDef[] = [
     scale: 1,
     decimals: 0,
     confidence: 'low',
-    note: 'Tracks 0x0510 exactly. Rose 90 -> 150 as charging stopped, so it is not PV current.',
+    note:
+      'Matched 0x0510 exactly across the charge step, but the two diverge over a longer ' +
+      'window, so they are not the same quantity. Range 0–184.',
+  },
+  {
+    key: 'live0510',
+    addr: 0x0510,
+    label: 'Unidentified (0x0510)',
+    kind: 'live',
+    scale: 1,
+    decimals: 0,
+    confidence: 'low',
+    note:
+      'Strongest unidentified signal: correlates 0.84 with battery voltage over 517 ' +
+      'samples, range 0–1504. A load-side step change is what will name it.',
   },
   {
     key: 'runtimeCounter',
