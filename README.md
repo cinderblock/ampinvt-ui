@@ -183,13 +183,35 @@ Only one mapping has been confirmed by an actual round trip: `0x1103`
 `[35]` and `[37]` share that default; which is which is unresolved. Change one on the
 inverter's LCD and see which register moves — that technique settles any `medium` entry.
 
-## What is not implemented yet
+## How registers get identified
 
-PV voltage, PV current, load power and output power are **not identified**. Every
-candidate register read zero while the test unit sat idle, making them indistinguishable
-from genuinely unused ones. Finding them needs a live diff taken while the inverter is
-actually charging or under load. The **Raw registers** tab exists for exactly this: watch
-it across a state change and note what moves.
+By correlating a log against a known physical change. The strongest evidence so far came
+from unplugging a wall charger while logging: charge current dropped from 19.78 A to
+0.53 A in one minute, with the battery pack's own readout photographed at both moments.
+Diffing the log across that step gave four identifications at once:
+
+| Register | before (20 A wall) | after (0.5 A solar) | pack readout |
+|---|---|---|---|
+| `0x0500` | 543 → 54.3 V | 537 → **53.7 V** | 54.06 / **53.69 V** |
+| `0x0501` | 65341 → **−19.5 A** | 65524 → **−1.2 A** | 19.78 / 0.53 A |
+| `0x061f` | 1076 → **107.6 V** | **0** | wall unplugged |
+| `0x0507` | 757 → 75.7 V | 1157 → **115.7 V** | PV ~120 V |
+
+`0x061f` collapsing to zero exactly when mains went away is unambiguous. `0x0507` *rising*
+when charging stopped is physically right — with the pack near full the MPPT backs off and
+the array drifts toward open-circuit.
+
+`tools/step_diff.py` and `tools/analyze_log.py` automate this: log across a state change,
+then diff or rank by correlation.
+
+### Still unidentified
+
+PV current, load power and output power. Two registers are known-but-unnamed:
+
+- **`0x0502`** — moves with charge activity but is *not* SOC; it read 85 then 79 while the
+  pack held 92%.
+- **`0x0509` / `0x0510`** — track each other exactly, and rose 90 → 150 as charging
+  *stopped*, which rules out PV current.
 
 ## Register map
 
@@ -198,6 +220,9 @@ See [`src/registers.ts`](src/registers.ts) for the full annotated map. Highlight
 | Register | Setting | Meaning | Scale |
 |---|---|---|---|
 | `0x0500` | — | Battery voltage (live) | ÷10 |
+| `0x0501` | — | Battery current (live), **signed**, −ve = charging | ÷10 A |
+| `0x0507` | — | PV voltage (live) | ÷10 V |
+| `0x061f` | — | AC input voltage (live), 0 with no mains | ÷10 V |
 | `0x1003` | `[07]` | Max charging current | ÷10 A |
 | `0x1007` | `[09]` | Boost / absorption voltage | ×0.4 V |
 | `0x1008` | `[11]` | Float voltage | ×0.4 V |

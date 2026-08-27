@@ -2,6 +2,7 @@ import {
   BUILD_STRING_RANGE,
   REGISTERS,
   decodeAscii,
+  describeBatteryCurrent,
   describeBatteryType,
   formatValue,
   type RegisterDef,
@@ -40,14 +41,13 @@ export default function Dashboard({ registers, connected }: Props) {
   const info = REGISTERS.filter((r) => r.kind === 'info');
   const build = decodeAscii(registers, BUILD_STRING_RANGE.addr, BUILD_STRING_RANGE.count);
 
-  const idle =
-    connected &&
-    (registers.get(0x0501) ?? 0) <= 1 &&
-    (registers.get(0x0502) ?? 0) === 0;
-
   const battery = describeBatteryType(registers.get(0x1002));
   const boost = registers.get(0x1007);
   const float = registers.get(0x1008);
+  const current = describeBatteryCurrent(registers.get(0x0501));
+  const mains = registers.get(0x061f);
+
+  const idle = connected && current?.direction === 'idle' && !mains;
 
   return (
     <>
@@ -80,6 +80,22 @@ export default function Dashboard({ registers, connected }: Props) {
             <strong>Inverter appears idle.</strong> Almost every telemetry register reads
             zero when the unit is neither charging nor inverting, so most of this page will
             stay blank until there is PV input or a load. That is expected, not a fault.
+          </div>
+        </div>
+      )}
+
+      {current && (
+        <div className="tiles">
+          <div className="tile">
+            <div className="label">Battery</div>
+            <div className="value">
+              {current.magnitude.toFixed(1)}
+              <span className="unit">A</span>
+            </div>
+            <div className="hint">
+              {current.direction}
+              {mains ? ' · mains present' : ' · off-grid'}
+            </div>
           </div>
         </div>
       )}

@@ -52,6 +52,12 @@ export interface RegisterDef {
   decimals: number;
   unit?: string;
   confidence: Confidence;
+  /**
+   * Interpret the raw 16-bit value as signed. Battery current is stored this
+   * way — 0xFF39 is -199, i.e. 19.9 A *into* the battery. Reading it unsigned
+   * displays a nonsensical 6533.7 A.
+   */
+  signed?: boolean;
   writable?: boolean;
   tier?: Tier;
   /** Present for enumerated registers — renders a picker instead of a number. */
@@ -122,15 +128,43 @@ export const REGISTERS: RegisterDef[] = [
     confidence: 'high',
   },
   {
-    key: 'liveCurrent',
+    key: 'batteryCurrent',
     addr: 0x0501,
-    label: 'Current',
+    label: 'Battery current',
     kind: 'live',
     scale: TENTHS,
     decimals: 1,
     unit: 'A',
-    confidence: 'low',
-    note: 'Fluctuates ±1 at idle. Sign and direction unconfirmed.',
+    signed: true,
+    confidence: 'high',
+    note:
+      'Signed: negative means charging. Verified against the battery pack readout — ' +
+      'raw 65341 (-19.5 A) while the pack reported 19.78 A charging, and 65524 ' +
+      '(-1.2 A) one minute later when the pack read 0.53 A.',
+  },
+  {
+    key: 'pvVoltage',
+    addr: 0x0507,
+    label: 'PV voltage',
+    kind: 'live',
+    scale: LIVE_VOLT,
+    decimals: 1,
+    unit: 'V',
+    confidence: 'high',
+    note:
+      'Rises toward open-circuit when charge demand falls — 75.7 V while bulk ' +
+      'charging, 115.7 V a minute later with the pack near full.',
+  },
+  {
+    key: 'acInputVoltage',
+    addr: 0x061f,
+    label: 'AC input voltage',
+    kind: 'live',
+    scale: LIVE_VOLT,
+    decimals: 1,
+    unit: 'V',
+    confidence: 'high',
+    note: 'Reads 0 with no mains present. Went 107.6 V -> 0 the moment the wall charger was unplugged.',
   },
   {
     key: 'live0502',
@@ -140,6 +174,17 @@ export const REGISTERS: RegisterDef[] = [
     scale: 1,
     decimals: 0,
     confidence: 'low',
+    note: 'Moves with charge activity but is not SOC — read 85 then 79 while the pack held 92%.',
+  },
+  {
+    key: 'live0509',
+    addr: 0x0509,
+    label: 'Unidentified (0x0509)',
+    kind: 'live',
+    scale: 1,
+    decimals: 0,
+    confidence: 'low',
+    note: 'Tracks 0x0510 exactly. Rose 90 -> 150 as charging stopped, so it is not PV current.',
   },
   {
     key: 'runtimeCounter',
@@ -567,16 +612,36 @@ export function decodeAscii(values: Map<number, number>, addr: number, count: nu
   return out.trim();
 }
 
+/** Reinterpret a raw 16-bit word as signed, for registers that need it. */
+export function asSigned(raw: number): number {
+  return raw > 32767 ? raw - 65536 : raw;
+}
+
 export function toDisplay(def: RegisterDef, raw: number): number {
-  return raw * def.scale;
+  return (def.signed ? asSigned(raw) : raw) * def.scale;
 }
 
 export function toRaw(def: RegisterDef, display: number): number {
-  return Math.round(display / def.scale);
+  const value = Math.round(display / def.scale);
+  return def.signed && value < 0 ? value + 65536 : value;
 }
 
 export function formatValue(def: RegisterDef, raw: number | undefined): string {
   if (raw === undefined) return '—';
-  const value = toDisplay(def, raw);
-  return value.toFixed(def.decimals);
+  return toDisplay(def, raw).toFixed(def.decimals);
+}
+
+/**
+ * Battery current is signed with negative meaning charging, which is the
+ * opposite of how anyone reads a dashboard. Show the magnitude and say which
+ * way it is going in words.
+ */
+export function describeBatteryCurrent(raw: number | undefined) {
+  if (raw === undefined) return undefined;
+  const amps = asSigned(raw) / 10;
+  return {
+    amps,
+    magnitude: Math.abs(amps),
+    direction: amps < -0.05 ? 'charging' : amps > 0.05 ? 'discharging' : 'idle',
+  } as const;
 }
