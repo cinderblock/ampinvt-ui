@@ -148,3 +148,40 @@ export interface HistoryResult {
  */
 export const readHistory = (addrs: number[], hours: number) =>
   invoke<HistoryResult>('read_history', { addrs, hours });
+
+export interface MqttEntity {
+  key: string;
+  name: string;
+  addr: number;
+  scale: number;
+  signed: boolean;
+  decimals: number;
+  unit: string | null;
+  deviceClass: string | null;
+  stateClass: string | null;
+}
+
+export interface MqttConfig {
+  host: string;
+  port: number;
+  username: string | null;
+  password: string | null;
+  entities: MqttEntity[];
+}
+
+export interface MqttStatus {
+  running: boolean;
+  connected: boolean;
+  host: string | null;
+  published: number;
+  /** State updates dropped because the broker was unreachable. */
+  dropped: number;
+  last_error: string | null;
+}
+
+export const mqttConfigure = (config: MqttConfig) =>
+  invoke<MqttStatus>('mqtt_configure', { config });
+
+export const mqttDisable = () => invoke<MqttStatus>('mqtt_disable');
+
+export const mqttStatus = () => invoke<MqttStatus>('mqtt_status');

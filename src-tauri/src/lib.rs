@@ -1,6 +1,7 @@
 mod history;
 mod logging;
 mod modbus;
+mod mqtt;
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -363,6 +364,7 @@ fn start_logging(
     app: tauri::AppHandle,
     link: State<Link>,
     logger: State<Arc<Logger>>,
+    publisher: State<Arc<mqtt::Mqtt>>,
     interval_secs: u64,
 ) -> Result<LoggingStatus, String> {
     if logger.running.load(Ordering::Relaxed) {
@@ -384,6 +386,7 @@ fn start_logging(
         link.rtu.clone(),
         link.params.clone(),
         logger.inner().clone(),
+        publisher.inner().clone(),
         dir,
         Duration::from_secs(interval_secs.clamp(2, 3600)),
     );
@@ -419,6 +422,38 @@ fn logging_status(logger: State<Arc<Logger>>) -> LoggingStatus {
     logging::status(&logger)
 }
 
+/// (Re)configure MQTT publishing. The frontend supplies the entity map built
+/// from registers.ts — device knowledge stays in that one file.
+#[tauri::command]
+async fn mqtt_configure(
+    publisher: State<'_, Arc<mqtt::Mqtt>>,
+    config: mqtt::MqttConfig,
+) -> Result<mqtt::MqttStatus, String> {
+    let publisher = publisher.inner().clone();
+    // Off the main thread: teardown of a previous session can wait on a
+    // blocked network write.
+    off_thread(move || {
+        publisher.configure(config);
+        Ok(publisher.status())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn mqtt_disable(publisher: State<'_, Arc<mqtt::Mqtt>>) -> Result<mqtt::MqttStatus, String> {
+    let publisher = publisher.inner().clone();
+    off_thread(move || {
+        publisher.disable();
+        Ok(publisher.status())
+    })
+    .await
+}
+
+#[tauri::command]
+fn mqtt_status(publisher: State<Arc<mqtt::Mqtt>>) -> mqtt::MqttStatus {
+    publisher.status()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -427,6 +462,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(Link::default())
         .manage(Arc::new(Logger::default()))
+        .manage(Arc::new(mqtt::Mqtt::default()))
         // Stop the logger thread when the app is closing. Without this the
         // process can linger holding the serial port, which looks like a hang
         // and needs Task Manager to clear.
@@ -434,6 +470,11 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if let Some(logger) = window.try_state::<Arc<Logger>>() {
                     logger.running.store(false, Ordering::Relaxed);
+                }
+                // Publish the retained "offline" while we still can, so HA
+                // shows unavailable instead of stale numbers.
+                if let Some(publisher) = window.try_state::<Arc<mqtt::Mqtt>>() {
+                    publisher.disable();
                 }
             }
         })
@@ -450,7 +491,10 @@ pub fn run() {
             start_logging,
             stop_logging,
             logging_status,
-            read_history
+            read_history,
+            mqtt_configure,
+            mqtt_disable,
+            mqtt_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

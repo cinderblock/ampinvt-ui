@@ -225,6 +225,7 @@ pub fn spawn(
     link: Arc<Mutex<Option<crate::modbus::Rtu>>>,
     params: Arc<Mutex<Option<crate::ConnParams>>>,
     logger: Arc<Logger>,
+    publisher: Arc<crate::mqtt::Mqtt>,
     dir: PathBuf,
     interval: Duration,
 ) {
@@ -302,6 +303,9 @@ pub fn spawn(
             // goes mute must leave a timestamped trail — otherwise the failure
             // is invisible and there is nothing to correlate against later.
             let (line, succeeded) = if connected && !values.is_empty() {
+                // The sweep already read everything; MQTT rides along for
+                // free rather than running its own poller on the shared bus.
+                publisher.publish_sweep(&values);
                 // Full snapshot on the first record, periodically thereafter,
                 // and whenever the set of readable registers changes — a delta
                 // against a different key set would be ambiguous to replay.

@@ -22,8 +22,10 @@ import ConnectionBar from './components/ConnectionBar';
 import Dashboard from './components/Dashboard';
 import History from './components/History';
 import Settings from './components/Settings';
+import MqttPanel from './components/MqttPanel';
 import RawExplorer from './components/RawExplorer';
 import Updates from './components/Updates';
+import { applyMqtt, loadMqttPrefs } from './mqtt';
 
 type Tab = 'dashboard' | 'history' | 'settings' | 'raw' | 'updates';
 
@@ -134,6 +136,12 @@ function Shell() {
       clearInterval(slow);
     };
   }, [connected, poll, pollMs]);
+
+  // MQTT publishing resumes on startup if it was enabled — Home Assistant
+  // should not need the app window touched after a reboot.
+  useEffect(() => {
+    void applyMqtt(loadMqttPrefs()).catch(() => undefined);
+  }, []);
 
   // Logging is on by default: the data is only capturable while the event is
   // happening, and a missed solar ramp cannot be recovered later.
@@ -282,6 +290,7 @@ function Shell() {
       {tab === 'raw' && (
         <>
           <LoggingPanel connected={connected} />
+          <MqttPanel />
           <RawExplorer blocks={blocks} />
         </>
       )}
