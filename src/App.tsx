@@ -20,11 +20,12 @@ import { SafetyProvider, useSafety } from './safety';
 import { loadPrefs, useUpdater, type UpdatePrefs } from './updater';
 import ConnectionBar from './components/ConnectionBar';
 import Dashboard from './components/Dashboard';
+import History from './components/History';
 import Settings from './components/Settings';
 import RawExplorer from './components/RawExplorer';
 import Updates from './components/Updates';
 
-type Tab = 'dashboard' | 'settings' | 'raw' | 'updates';
+type Tab = 'dashboard' | 'history' | 'settings' | 'raw' | 'updates';
 
 /**
  * The inverter's bus does not like being polled hard. One second is the
@@ -238,6 +239,9 @@ function Shell() {
         <button role="tab" aria-selected={tab === 'dashboard'} onClick={() => setTab('dashboard')}>
           Dashboard
         </button>
+        <button role="tab" aria-selected={tab === 'history'} onClick={() => setTab('history')}>
+          History
+        </button>
         <button role="tab" aria-selected={tab === 'settings'} onClick={() => setTab('settings')}>
           Settings
         </button>
@@ -250,7 +254,8 @@ function Shell() {
         </button>
       </nav>
 
-      {!connected && tab !== 'updates' && (
+      {/* History and Updates read disk/network, not the device — the nag would be noise there. */}
+      {!connected && tab !== 'updates' && tab !== 'history' && (
         <div className="banner">
           <span className="icon" aria-hidden="true">
             !
@@ -263,6 +268,8 @@ function Shell() {
       )}
 
       {tab === 'dashboard' && <Dashboard registers={registers} connected={connected} />}
+      {/* Reads log files from disk, so it works even while disconnected. */}
+      {tab === 'history' && <History />}
       {tab === 'settings' && (
         <Settings
           registers={registers}

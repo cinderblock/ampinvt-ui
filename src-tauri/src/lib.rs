@@ -1,3 +1,4 @@
+mod history;
 mod logging;
 mod modbus;
 
@@ -390,6 +391,23 @@ fn start_logging(
     Ok(logging::status(&logger))
 }
 
+/// Replay the daily log files into per-register time series for charting.
+/// Reads from disk, not the device, so it works even while disconnected.
+#[tauri::command]
+async fn read_history(
+    app: tauri::AppHandle,
+    addrs: Vec<u16>,
+    hours: f64,
+) -> Result<history::HistoryResult, String> {
+    let dir: PathBuf = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?
+        .join("logs");
+    // Megabytes of JSONL; do not block the UI event loop on it.
+    off_thread(move || Ok(history::read(&dir, &addrs, hours))).await
+}
+
 #[tauri::command]
 fn stop_logging(logger: State<Arc<Logger>>) -> LoggingStatus {
     logger.running.store(false, Ordering::Relaxed);
@@ -431,7 +449,8 @@ pub fn run() {
             discover_blocks,
             start_logging,
             stop_logging,
-            logging_status
+            logging_status,
+            read_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

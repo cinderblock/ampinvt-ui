@@ -125,3 +125,26 @@ export function toRegisterMap(blocks: BlockResult[]): Map<number, number> {
  * backend actually applied, which is clamped to 10ms..=5s.
  */
 export const setInterFrame = (ms: number) => invoke<number>('set_inter_frame', { ms });
+
+export interface HistorySeries {
+  addr: number;
+  /**
+   * `[unixSeconds, rawValue]` pairs. Points are emitted on change and at
+   * least once a minute; spacing much beyond that heartbeat means the logger
+   * was not running, so render it as a gap rather than a line.
+   */
+  points: [number, number][];
+}
+
+export interface HistoryResult {
+  from: number;
+  to: number;
+  series: HistorySeries[];
+}
+
+/**
+ * Replay the daily log files into per-register time series. Reads disk, not
+ * the device, so it works while disconnected.
+ */
+export const readHistory = (addrs: number[], hours: number) =>
+  invoke<HistoryResult>('read_history', { addrs, hours });
