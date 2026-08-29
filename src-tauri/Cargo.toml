@@ -1,6 +1,6 @@
 [package]
 name = "ampinvt-ui"
-version = "0.19.0"
+version = "0.20.0"
 description = "Monitor and configure an AMPINVT TEL-series solar inverter over Modbus RTU"
 authors = ["Cameron Tacklind"]
 edition = "2021"
