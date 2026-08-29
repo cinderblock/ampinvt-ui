@@ -46,6 +46,7 @@ function Tile({ def, registers }: { def: RegisterDef; registers: Map<number, num
 
 export default function Dashboard({ registers, connected }: Props) {
   const live = REGISTERS.filter((r) => r.kind === 'live');
+  const counters = REGISTERS.filter((r) => r.kind === 'counter');
   const info = REGISTERS.filter((r) => r.kind === 'info');
   const build = decodeAscii(registers, BUILD_STRING_RANGE.addr, BUILD_STRING_RANGE.count);
 
@@ -98,6 +99,28 @@ export default function Dashboard({ registers, connected }: Props) {
       </div>
 
       <section>
+        <h2>Counters</h2>
+        <p className="desc">
+          The inverter's own statistics block at <span className="mono">0x0700</span>.
+          "Today" counters reset at <em>device</em> midnight — the hour the unit powered
+          on, not calendar midnight. Verified against energy integrated from three days
+          of logs.
+        </p>
+        <table className="raw">
+          <tbody>
+            {counters.map((def) => (
+              <tr key={def.key}>
+                <td>{def.label}</td>
+                <td>
+                  {formatValue(def, registers.get(def.addr))} {def.unit}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section>
         <h2>Device</h2>
         <p className="desc">
           Identity read from the inverter. The firmware build date is stored as ASCII, one
@@ -144,15 +167,16 @@ export default function Dashboard({ registers, connected }: Props) {
       <section>
         <h2>What is not here yet</h2>
         <p className="desc">
-          Battery voltage and current, PV voltage, AC input voltage, PV input power and
-          total input power are all identified against real operating data. Still missing:{' '}
-          <strong>load power</strong> and <strong>output power</strong>.
+          The charge side is now well mapped: voltages, currents, powers, temperatures and
+          the whole daily/lifetime counter block. Still not settled:{' '}
+          <strong>load power</strong> — 0x061c is probably AC output current in 0.1 A RMS,
+          but that rests on one measured load at an assumed power factor.
         </p>
         <p className="desc">
-          Those two need a step change in <strong>load</strong> rather than charge — every
-          step so far has been charge-side, which is exactly why only charge-side registers
-          have names. Start logging, switch something substantial on, and diff across the
-          boundary with <span className="mono">tools/step_diff.py</span>.
+          A purely resistive load of known wattage (heater, incandescent bulb) would settle
+          it: at 120 W expect ~10 counts if it is AC amps, ~16 if it is DC-side. Also worth
+          chasing: 0x061a, which tracks PV charge current minus roughly the load share but
+          fits no clean model yet.
         </p>
       </section>
     </>

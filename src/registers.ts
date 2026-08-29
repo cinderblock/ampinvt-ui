@@ -21,7 +21,7 @@
  */
 
 export type Confidence = 'high' | 'medium' | 'low';
-export type Kind = 'live' | 'setting' | 'info';
+export type Kind = 'live' | 'counter' | 'setting' | 'info';
 
 /**
  * Write tiers.
@@ -161,6 +161,21 @@ export const REGISTERS: RegisterDef[] = [
     confidence: 'high',
   },
   {
+    key: 'pvCurrent',
+    addr: 0x0508,
+    label: 'PV input current',
+    kind: 'live',
+    scale: TENTHS,
+    decimals: 1,
+    unit: 'A',
+    confidence: 'high',
+    /*
+     * 0x0508 = 10 * (pvW / pvV) with slope 9.998, intercept 0.05, r² = 1.000
+     * over 5,069 samples — and 0x0509 is literally pvV * 0x0508 / 100, so the
+     * power register is computed from this one.
+     */
+  },
+  {
     key: 'pvVoltage',
     addr: 0x0507,
     label: 'PV voltage',
@@ -183,6 +198,72 @@ export const REGISTERS: RegisterDef[] = [
     confidence: 'high',
     // Went 107.6 V -> 0 the moment the wall charger was unplugged.
     note: 'Reads 0 with no mains present.',
+  },
+  {
+    key: 'acChargerCurrent',
+    addr: 0x061e,
+    label: 'AC charger current',
+    kind: 'live',
+    scale: TENTHS,
+    decimals: 1,
+    unit: 'A',
+    confidence: 'high',
+    /*
+     * DC-side output of the mains charger. 0x061e * battV / 100 equals
+     * (0x0510 - 0x0509) with slope 0.994, intercept 0.0, r² = 1.000 over 795
+     * mains samples — total input power is computed from this register.
+     */
+    note: 'DC-side output of the mains charger. Zero without mains.',
+  },
+  {
+    key: 'operatingMode',
+    addr: 0x0600,
+    label: 'Operating mode',
+    kind: 'live',
+    scale: 1,
+    decimals: 0,
+    confidence: 'medium',
+    /*
+     * Transitions observed over three days of logs: 5 -> 4 the moment AC
+     * charging started, 4 -> 1 when the charge completed with mains still at
+     * 119.4 V, 1 -> 5 when AC input dropped to 0.
+     */
+    note: '1 = mains bypass, 4 = AC charging, 5 = inverter (battery).',
+  },
+  {
+    key: 'mpptTemp',
+    addr: 0x0616,
+    label: 'MPPT temperature',
+    kind: 'live',
+    scale: TENTHS,
+    decimals: 1,
+    unit: '°C',
+    confidence: 'medium',
+    note: 'Peaks with PV power, smooth cooling curve overnight.',
+  },
+  {
+    key: 'transformerTemp',
+    addr: 0x0618,
+    label: 'Transformer temperature',
+    kind: 'live',
+    scale: TENTHS,
+    decimals: 1,
+    unit: '°C',
+    confidence: 'low',
+    // 63-66 °C even idle — consistent with the always-energized LF
+    // transformer's core loss (~36 W standby).
+    note: 'Hottest measured spot; warm even at idle.',
+  },
+  {
+    key: 'inverterTemp',
+    addr: 0x0619,
+    label: 'Inverter temperature',
+    kind: 'live',
+    scale: TENTHS,
+    decimals: 1,
+    unit: '°C',
+    confidence: 'low',
+    note: 'Rises during battery-mode discharge, falls while charging.',
   },
   {
     key: 'estimatedSoc',
@@ -262,18 +343,191 @@ export const REGISTERS: RegisterDef[] = [
      * Against 19.5 counts that is ~7.6 W per count, which is not a round
      * number in any obvious unit — so treat this as "a load is present and
      * roughly how big" until a second load of known size pins the scale.
+     *
+     * Best current hypothesis after three days of data: AC OUTPUT CURRENT in
+     * 0.1 A RMS. 19.5 counts = 1.95 A at 120 V = 234 VA, which is that ~148 W
+     * load at power factor 0.63 — normal for electronics, and it dissolves
+     * the "7.6 W/count isn't round" puzzle: the count is round in amps, not
+     * watts. A purely resistive load would settle it: a 120 W heater should
+     * read ~10 counts if this is AC amps, ~16 if it is DC-side.
      */
-    note: 'Zero with no load. Scale unresolved — a second known load would settle it.',
+    note: 'Probably AC output current in 0.1 A RMS — a resistive test load would confirm.',
   },
+  /*
+   * 0x0611/0x0612 are one structured uptime clock, not a runtime accumulator
+   * as first guessed. Confirmed sample-by-sample over three days of logs:
+   *
+   *   0x0611 = (days << 8) | hours       — increments when 0x0612 wraps
+   *   0x0612 = (minutes << 8) | (seconds + 80)
+   *
+   * The low byte spans exactly 80..139 (+1 per second), the register resets
+   * every 3600 s. Phase is set at power-on, so "device midnight" — when all
+   * the daily counters below reset — is the hour rollover, not calendar
+   * midnight. It ran at ~11:58 UTC during the capture.
+   */
   {
-    key: 'runtimeCounter',
-    addr: 0x0612,
-    label: 'Runtime counter',
-    kind: 'live',
+    key: 'uptimeDayHour',
+    addr: 0x0611,
+    label: 'Uptime (day·hour)',
+    kind: 'info',
     scale: 1,
     decimals: 0,
-    confidence: 'low',
-    note: 'Climbs monotonically. Units unknown.',
+    confidence: 'high',
+    note: 'High byte days, low byte hours since power-on.',
+  },
+  {
+    key: 'clockMinSec',
+    addr: 0x0612,
+    label: 'Clock (min·sec)',
+    kind: 'info',
+    scale: 1,
+    decimals: 0,
+    confidence: 'high',
+    note: 'High byte minutes, low byte seconds + 80. Wraps hourly.',
+  },
+
+  // ------------------------------------------------------------- counters ---
+  /*
+   * The 0x0700 block is a statistics area the device maintains itself:
+   * today/lifetime pairs for energy, amp-hours and runtime. Every "today"
+   * register resets at DEVICE midnight (see the 0x0611 clock note), observed
+   * directly at 2026-08-28 11:58:53Z simultaneously with the day rollover.
+   * All identified by matching counter increments against energy and charge
+   * integrals computed from three days of logged power and current.
+   *
+   * The "total" counters had only ~8 days of accumulation, matching device
+   * uptime — they may clear on power-cycle rather than being lifetime.
+   */
+  {
+    key: 'pvEnergyToday',
+    addr: 0x070d,
+    label: 'PV energy today',
+    kind: 'counter',
+    scale: 0.1,
+    decimals: 1,
+    unit: 'kWh',
+    confidence: 'high',
+    /*
+     * +1 count per 99.6-101.2 measured PV watt-hours across 25+ intervals in
+     * both trickle and full sun; stayed 0 through 1.29 kWh of pure AC
+     * charging, so it is PV-only.
+     */
+  },
+  {
+    key: 'pvEnergyTotal',
+    addr: 0x070e,
+    label: 'PV energy total',
+    kind: 'counter',
+    scale: 0.1,
+    decimals: 1,
+    unit: 'kWh',
+    confidence: 'high',
+  },
+  {
+    key: 'acEnergyToday',
+    addr: 0x071f,
+    label: 'AC charge energy today',
+    kind: 'counter',
+    scale: 0.1,
+    decimals: 1,
+    unit: 'kWh',
+    confidence: 'medium',
+    // +1 per ~85 Wh of DC-side input = ~99 Wh AC-side at the established 86%
+    // conversion efficiency, so this counts the AC side of the meter.
+    note: 'Measured on the AC side, before conversion losses.',
+  },
+  {
+    key: 'chargeAhToday',
+    addr: 0x0710,
+    label: 'Charge today',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'high',
+  },
+  {
+    key: 'chargeAhTotal',
+    addr: 0x0711,
+    label: 'Charge total',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'high',
+  },
+  {
+    key: 'dischargeAhToday',
+    addr: 0x0713,
+    label: 'Discharge today',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'high',
+  },
+  {
+    key: 'dischargeAhTotal',
+    addr: 0x0714,
+    label: 'Discharge total',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'high',
+  },
+  {
+    key: 'acChargerAhToday',
+    addr: 0x0719,
+    label: 'AC charger output today',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'medium',
+    // 1.2x the battery-Ah rate during mains charge because it includes the
+    // share feeding the load, not just the battery.
+  },
+  {
+    key: 'acChargerAhTotal',
+    addr: 0x071a,
+    label: 'AC charger output total',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'Ah',
+    confidence: 'medium',
+  },
+  {
+    key: 'inverterHoursToday',
+    addr: 0x0706,
+    label: 'Inverter runtime today',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'h',
+    confidence: 'medium',
+    note: 'Hours running from battery. Frozen while mains is present.',
+  },
+  {
+    key: 'inverterHoursTotal',
+    addr: 0x0704,
+    label: 'Inverter runtime total',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'h',
+    confidence: 'medium',
+  },
+  {
+    key: 'acChargeHoursTotal',
+    addr: 0x0705,
+    label: 'AC charging hours total',
+    kind: 'counter',
+    scale: 1,
+    decimals: 0,
+    unit: 'h',
+    confidence: 'medium',
   },
 
   // ------------------------------------------------------------- charging ---
@@ -383,6 +637,8 @@ export const REGISTERS: RegisterDef[] = [
     min: 48,
     max: 58,
     step: 0.4,
+    // Read identical to 0x1007 (boost voltage) through three full days of
+    // logs on the GEL profile — the two track together, at least here.
     note: 'Lead-acid only. Equalization must stay disabled on LiFePO4.',
   },
 
@@ -665,6 +921,7 @@ export const FAST_BLOCKS: { addr: number; count: number }[] = [
  */
 export const SLOW_BLOCKS: { addr: number; count: number }[] = [
   { addr: 0x0400, count: 32 }, // identity / firmware build string
+  { addr: 0x0700, count: 32 }, // statistics: daily/lifetime energy, Ah, hours
   { addr: 0x1000, count: 32 }, // settings
   { addr: 0x1100, count: 32 }, // settings (AC / PV currents)
 ];
